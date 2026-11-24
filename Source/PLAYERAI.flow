@@ -1,0 +1,3263 @@
+// ============================================================================
+// Arke Intelligence - Tactics Rewrite (Persona 5 Royal PC Edition)
+// Target file: BASE.CPK -> BATTLE/SCRIPT/PLAYERAI.BF (FlowScript V3BE / P5R)
+//
+// Inspired by Arke Intelligence - Tactics Rewrite (Persona 3 Reload),
+// rebuilt from the ground up for Persona 5 Royal PC with full support for:
+//   - All 4 P5R Tactics (Act Freely, Full Assault, Conserve SP, Heal/Support)
+//   - Showtime, Baton Pass (+ Technical / Healer / Charged routing), Technicals
+//   - Smart Gun & Physical skill usage (including zero-SP Phys/Gun under Conserve SP)
+//   - Full Buff/Debuff/Karn/Wall/Break, 3rd-Semester & Will Seed Ring skills
+//   - Tiered party HP & 3-family Ailment scanning
+//   - All vanilla P5R boss/scripted-encounter rules (Maruki lockouts, Wakaba,
+//     Disaster Shadows, Treasure Demons, Mouse/Forget safety)
+// ============================================================================
+
+// Script-level state (initialized every turn in Initialize)
+int sActionDone;      // 0 = undecided, 1 = deferred (sSkillId/sTargetUid), 10 = issued
+int sTargetUid;       // Target unit UID for deferred action
+int sSkillId;         // Skill ID for deferred action
+
+int sMyUid;           // Acting unit Battle UID (AI_GET_MY_ID)
+int sMyCharId;        // Acting party character ID 1..10 (BTL_GET_CURRENT_CHARAID)
+int sOrder;           // Active tactic: 0=ActFreely, 1=FullAssault, 2=ConserveSP, 3=HealSupport
+int sMyHpPct;         // Acting unit HP% (0..100)
+int sMySpPct;         // Acting unit SP% (0..100)
+
+int sIsBoss;          // 1 if boss or exceptional encounter
+int sIsUnstable;      // 1 if a Disaster Shadow is present
+int sIsHouma;         // 1 if a Treasure Demon is present
+int sNotPhysical;     // 1 if physical/melee blocked (e.g. flying Cognitive Wakaba)
+int sLockMode;        // Maruki Reality lockout mode (0=none, 1..7)
+int sSingleOnlyFlag;  // BIT 11601: prioritize single-target over AoE
+int sNo1MoreFlag;     // BIT 11618: disable 1-More / Gun / Unknown-attr probing
+int sNoFinishFlag;    // BIT 11718: disable melee end-battle finisher
+int sAilmentPrioFlag; // BIT 11715: prioritize ailment skills
+
+int sEnemyCount;      // Active enemy count
+int sDownCount;       // Downed enemy count
+int sIsHealerChar;    // 1 if Morgana (3) or Makoto (6)
+int sIsSupportChar;   // 1 if Morgana (3), Yusuke (5), Makoto (6), or Haru (7)
+
+// ============================================================================
+// Procedure Index 0: Engine Entry Point (MUST remain index 0)
+// ============================================================================
+void main_AI_routine()
+{
+    Initialize();
+
+    // Scripted / tutorial override
+    if (AI_CHK_EXCEPTION() == 1)
+    {
+        return;
+    }
+
+    // Shido's Palace Mouse status (0x00400000): Persona skills, Guns, Showtime & Baton Pass are disabled.
+    // Guard safely (instead of dealing 1 damage and taking lethal hits) until Mouse wears off!
+    if (AI_CHK_MYBAD(0x00400000) == 1)
+    {
+        ACT_ChargeGuard();
+        if (sActionDone != 0)
+        {
+            return;
+        }
+        if (sLockMode != 5)
+        {
+            AI_ACT_DEFENSE();
+            sActionDone = 10;
+            return;
+        }
+        AI_ACT_ATTACK();
+        AI_TAR_RND();
+        sActionDone = 10;
+        return;
+    }
+
+    // Bug fix over vanilla: when afflicted with Forget (0x40), still guard
+    // telegraphed boss charges, finish off foes, Baton Pass, or shoot Guns
+    // instead of blindly swinging melee!
+    if (AI_CHK_MYBAD(0x40) == 1)
+    {
+        ACT_ChargeGuard();
+        if (sActionDone != 0)
+        {
+            return;
+        }
+        ACT_EndBattle_ATK();
+        if (sActionDone != 0)
+        {
+            return;
+        }
+        ACT_Takeover();
+        if (sActionDone != 0)
+        {
+            return;
+        }
+        ACT_GunWeakOrKill();
+        if (sActionDone != 0)
+        {
+            return;
+        }
+        ACT_AttackOrGuard();
+        return;
+    }
+
+    // Dispatch by active Tactics order
+    if (sOrder == 0)
+    {
+        AI_pattern_Free();
+    }
+    else if (sOrder == 1)
+    {
+        AI_pattern_Damage();
+    }
+    else if (sOrder == 2)
+    {
+        AI_pattern_SaveSP();
+    }
+    else if (sOrder == 3)
+    {
+        AI_pattern_SaveHP();
+    }
+    else
+    {
+        ACT_AttackOrGuard();
+    }
+
+    // Execute deferred skill or safe fallback
+    if (sActionDone == 10)
+    {
+        return;
+    }
+    else if (sActionDone == 1)
+    {
+        AI_ACT_SKILL(sSkillId);
+        AI_TAR_UID(sTargetUid);
+        return;
+    }
+
+    ACT_AttackOrGuard();
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+// Returns 1 if party member charId (1..10) is alive and targetable
+int IsAllyAlive(int charId)
+{
+    if (charId == 8)
+    {
+        return 0;
+    }
+    if (AI_CHK_ID_FRTARGET(charId) != 1)
+    {
+        return 0;
+    }
+    if (AI_CHK_FRIDBAD(charId, 0x00080000) == 1)
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// Returns 1 if party member charId is free of action-blocking ailments
+// Combined bitmask 0x0D3E = Freeze|Shock|Dizzy|Confuse|Fear|Sleep|Despair|Brainwash (1 COMM call!)
+int IsAllyCapable(int charId)
+{
+    if (IsAllyAlive(charId) == 0)
+    {
+        return 0;
+    }
+    if (AI_CHK_FRIDBAD(charId, 0x0D3E) == 1)
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// Returns 1 if AoE attack of element `attr` is safe (no enemy Null/Repel/Drain,
+// no Disaster Shadow, and single-target priority flag not set)
+int IsAoESafeForAttr(int attr)
+{
+    if (sEnemyCount <= 1)
+    {
+        return 0;
+    }
+    if (sIsUnstable == 1)
+    {
+        return 0;
+    }
+    if (sSingleOnlyFlag == 1)
+    {
+        return 0;
+    }
+    if (AI_CHK_ENMUKOU(attr) == 1)
+    {
+        return 0;
+    }
+    if (AI_CHK_ENHANSYA(attr) == 1)
+    {
+        return 0;
+    }
+    if (AI_CHK_ENKYUSYU(attr) == 1)
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// Returns 1 if Haru's AoE Grenade Launcher can safely fire
+int IsHaruGunSafe()
+{
+    if (sIsUnstable == 1)
+    {
+        return 0;
+    }
+    if (sSingleOnlyFlag == 1)
+    {
+        return 0;
+    }
+    if (AI_CHK_ENMUKOU(1) == 1)
+    {
+        return 0;
+    }
+    if (AI_CHK_ENHANSYA(1) == 1)
+    {
+        return 0;
+    }
+    if (AI_CHK_ENKYUSYU(1) == 1)
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// Returns 1 if any enemy resists, nulls, repels, or absorbs `attr`
+int IsAttrImpeded(int attr)
+{
+    if (AI_CHK_ENRESIST(attr) == 1) { return 1; }
+    if (AI_CHK_ENMUKOU(attr) == 1)  { return 1; }
+    if (AI_CHK_ENHANSYA(attr) == 1) { return 1; }
+    if (AI_CHK_ENKYUSYU(attr) == 1) { return 1; }
+    return 0;
+}
+
+// ============================================================================
+// Initialize Turn Context
+// ============================================================================
+void Initialize()
+{
+    int maxHp;
+    int maxSp;
+
+    sActionDone = 0;
+    sTargetUid = -1;
+    sSkillId = 0;
+
+    sMyUid = AI_GET_MY_ID();
+    sMyCharId = BTL_GET_CURRENT_CHARAID();
+    sOrder = AI_GET_P_ORDER(sMyUid);
+
+    maxHp = AI_GET_P_MAX_HP(sMyUid);
+    if (maxHp > 0)
+    {
+        sMyHpPct = (100 * AI_GET_P_NOW_HP(sMyUid)) / maxHp;
+    }
+    else
+    {
+        sMyHpPct = 100;
+    }
+
+    maxSp = AI_GET_P_MAX_SP(sMyUid);
+    if (maxSp > 0)
+    {
+        sMySpPct = (100 * AI_GET_P_NOW_SP(sMyUid)) / maxSp;
+    }
+    else
+    {
+        sMySpPct = 0;
+    }
+
+    sIsBoss = 0;
+    if ((AI_CHK_BOSS() == 1) || (AI_CHK_EXCEPT_ENCOUNT(0) == 1))
+    {
+        sIsBoss = 1;
+    }
+
+    sIsUnstable = AI_CHK_UNSTABLE();
+    sIsHouma = AI_CHK_HOUMA();
+    sNotPhysical = BTL_CHK_NOTPHYSICAL();
+    sEnemyCount = AI_GET_E_NUM();
+    sDownCount = AI_GET_ENBAD_ON(0x00100000);
+
+    // Maruki Reality lockouts (BIT 11634 + COUNT 214)
+    sLockMode = 0;
+    if (BIT_CHK(805306368 + 370) == 1)
+    {
+        sLockMode = GET_COUNT(214);
+    }
+
+    sSingleOnlyFlag = BIT_CHK(805306368 + 337);
+    sNo1MoreFlag = BIT_CHK(805306368 + 354);
+    sNoFinishFlag = BIT_CHK(805306368 + 454);
+    sAilmentPrioFlag = BIT_CHK(805306368 + 451);
+
+    sIsHealerChar = 0;
+    if ((sMyCharId == 3) || (sMyCharId == 6))
+    {
+        sIsHealerChar = 1;
+    }
+
+    sIsSupportChar = 0;
+    if ((sMyCharId == 3) || (sMyCharId == 5) || (sMyCharId == 6) || (sMyCharId == 7))
+    {
+        sIsSupportChar = 1;
+    }
+
+    // Reset default skill slot (matches vanilla Initialize)
+    AI_ACT_SKILL(0);
+}
+
+// ============================================================================
+// Tactic 0: Act Freely (Balanced Tactical AI — Arke Intelligence Style)
+// ============================================================================
+void AI_pattern_Free()
+{
+    int roll;
+
+    ACT_EndBattle_ATK();
+    if (sActionDone != 0) { return; }
+
+    ACT_ChargeGuard();
+    if (sActionDone != 0) { return; }
+
+    ACT_Rez();
+    if (sActionDone != 0) { return; }
+
+    ACT_Heal(0);
+    if (sActionDone != 0) { return; }
+
+    ACT_CureAilment();
+    if (sActionDone != 0) { return; }
+
+    ACT_Showtime(0);
+    if (sActionDone != 0) { return; }
+
+    ACT_1MoreWeakness(0);
+    if (sActionDone != 0) { return; }
+
+    ACT_Takeover();
+    if (sActionDone != 0) { return; }
+
+    ACT_Fixed();
+    if (sActionDone != 0) { return; }
+
+    ACT_Technical();
+    if (sActionDone != 0) { return; }
+
+    if (sAilmentPrioFlag == 1)
+    {
+        ACT_Ailment(1);
+        if (sActionDone != 0) { return; }
+    }
+
+    ACT_KillEnemy_Gun();
+    if (sActionDone != 0) { return; }
+
+    // Always dispel dangerous enemy buffs / party debuffs; probabilistically cast buffs/debuffs
+    ACT_UrgentDispel();
+    if (sActionDone != 0) { return; }
+
+    if ((sIsBoss == 1) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
+    {
+        roll = RND(100);
+        if ((roll < 25) || ((sIsSupportChar == 1) && (roll < 40)) || ((sIsBoss == 1) && (roll < 45)))
+        {
+            ACT_Support(0);
+            if (sActionDone != 0) { return; }
+        }
+    }
+
+    // Charge/Concentrate setup when no standing weakness was exploited
+    ACT_ChargeConcentrate(0);
+    if (sActionDone != 0) { return; }
+
+    ACT_UnknownAttr();
+    if (sActionDone != 0) { return; }
+
+    if ((sAilmentPrioFlag == 0) && (sIsBoss == 0))
+    {
+        roll = RND(100);
+        if ((roll < 20) || (((sMyCharId == 4) || (sMyCharId == 7)) && (roll < 35)))
+        {
+            ACT_Ailment(0);
+            if (sActionDone != 0) { return; }
+        }
+    }
+
+    ACT_BestOffense(0);
+    if (sActionDone != 0) { return; }
+
+    ACT_GunSmart();
+    if (sActionDone != 0) { return; }
+
+    // Fallback: cast helpful support only on bosses or when foes are healthy & SP >= 25%
+    if ((sIsBoss == 1) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
+    {
+        ACT_Support(0);
+        if (sActionDone != 0) { return; }
+    }
+
+    if (sIsBoss == 0)
+    {
+        ACT_Ailment(0);
+        if (sActionDone != 0) { return; }
+    }
+
+    sActionDone = 0;
+}
+
+// ============================================================================
+// Tactic 1: Full Assault (Aggressive Offense, Charge/Concentrate & Baton Pass)
+// ============================================================================
+void AI_pattern_Damage()
+{
+    ACT_EndBattle_ATK();
+    if (sActionDone != 0) { return; }
+
+    ACT_ChargeGuard();
+    if (sActionDone != 0) { return; }
+
+    ACT_Showtime(1);
+    if (sActionDone != 0) { return; }
+
+    // Knock down standing weak foes & Baton Pass BEFORE spending a turn Charging!
+    ACT_1MoreWeakness(1);
+    if (sActionDone != 0) { return; }
+
+    ACT_Takeover();
+    if (sActionDone != 0) { return; }
+
+    ACT_Fixed();
+    if (sActionDone != 0) { return; }
+
+    ACT_Technical();
+    if (sActionDone != 0) { return; }
+
+    ACT_ChargeConcentrate(1);
+    if (sActionDone != 0) { return; }
+
+    // Probe unknown affinities before neutral damage (matches P3R Arke Pass 3; skips if Charged/Concentrated)
+    ACT_UnknownAttr();
+    if (sActionDone != 0) { return; }
+
+    ACT_BestOffense(1);
+    if (sActionDone != 0) { return; }
+
+    ACT_GunSmart();
+    if (sActionDone != 0) { return; }
+
+    if (sIsBoss == 0)
+    {
+        ACT_Ailment(0);
+        if (sActionDone != 0) { return; }
+    }
+
+    sActionDone = 0;
+}
+
+// ============================================================================
+// Tactic 2: Conserve SP (Zero-SP Phys/Gun Skills, Free Combos & Smart Guard)
+// ============================================================================
+void AI_pattern_SaveSP()
+{
+    ACT_EndBattle_ATK();
+    if (sActionDone != 0) { return; }
+
+    ACT_ChargeGuard();
+    if (sActionDone != 0) { return; }
+
+    // Only spend SP on revival or critical (<= 30% HP) emergency healing
+    ACT_EmergencyRezAndHeal();
+    if (sActionDone != 0) { return; }
+
+    // Showtime costs 0 SP!
+    ACT_Showtime(0);
+    if (sActionDone != 0) { return; }
+
+    // Free Gun knockdown or low-HP finisher before Baton Passing
+    ACT_GunWeakOrKill();
+    if (sActionDone != 0) { return; }
+
+    // Baton Pass costs 0 SP!
+    ACT_Takeover();
+    if (sActionDone != 0) { return; }
+
+    // Scripted boss fixed actions before generic zero-SP attacks
+    ACT_Fixed();
+    if (sActionDone != 0) { return; }
+
+    // Bug fix over vanilla: use HP-cost Physical & Gun skills (0 SP!)
+    ACT_PhysZeroSP();
+    if (sActionDone != 0) { return; }
+
+    ACT_GunSmart();
+    if (sActionDone != 0) { return; }
+
+    sActionDone = 0;
+}
+
+// ============================================================================
+// Tactic 3: Heal/Support (Proactive Healing, Curing, Buffs, Debuffs & Shields)
+// ============================================================================
+void AI_pattern_SaveHP()
+{
+    ACT_ChargeGuard();
+    if (sActionDone != 0) { return; }
+
+    // Finish lone low-HP foe with free melee before spending SP on buffs/heals
+    ACT_EndBattle_ATK();
+    if (sActionDone != 0) { return; }
+
+    ACT_Rez();
+    if (sActionDone != 0) { return; }
+
+    // Proactive 75% HP healing (Arke Intelligence Yukari-style threshold)
+    ACT_Heal(1);
+    if (sActionDone != 0) { return; }
+
+    ACT_CureAilment();
+    if (sActionDone != 0) { return; }
+
+    // Scripted boss fixed actions aren't preempted by generic buffs
+    ACT_Fixed();
+    if (sActionDone != 0) { return; }
+
+    ACT_UrgentDispel();
+    if (sActionDone != 0) { return; }
+
+    // Full buff/debuff/shield/3rd-sem/Will Seed Ring priority
+    ACT_Support(1);
+    if (sActionDone != 0) { return; }
+
+    // If everyone is healthy & buffed, contribute via Showtime / 1-More + Baton Pass
+    ACT_Showtime(0);
+    if (sActionDone != 0) { return; }
+
+    ACT_1MoreWeakness(0);
+    if (sActionDone != 0) { return; }
+
+    ACT_Takeover();
+    if (sActionDone != 0) { return; }
+
+    // Proactively refresh buff/debuff timers on bosses or healthy fights with spare SP
+    ACT_SupportRefresh();
+    if (sActionDone != 0) { return; }
+
+    if (sIsBoss == 0)
+    {
+        ACT_Ailment(0);
+        if (sActionDone != 0) { return; }
+    }
+
+    ACT_GunSmart();
+    if (sActionDone != 0) { return; }
+
+    sActionDone = 0;
+}
+
+// ============================================================================
+// Action: Finish Battle With Free Melee Attack (Last Enemy Kill Check)
+// ============================================================================
+void ACT_EndBattle_ATK()
+{
+    int myAttr;
+    int uid;
+
+    if ((sLockMode == 1) || (sNoFinishFlag == 1) || (sNotPhysical == 1))
+    {
+        return;
+    }
+
+    if (sEnemyCount == 1)
+    {
+        myAttr = AI_GET_MYATTRATTACK();
+        uid = AI_GET_UNINOMALHPMIN(myAttr);
+        if (uid != -1)
+        {
+            // Never melee a Shocked enemy (0x04) to avoid self-shock
+            if (AI_CHK_UNIBAD(uid, 4) == 0)
+            {
+                if (AI_CHK_UNIATTACK(uid) == 1)
+                {
+                    AI_ACT_ATTACK();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Action: Guard Against Telegraphed Boss Super-Attacks
+// ============================================================================
+void ACT_ChargeGuard()
+{
+    int res;
+
+    if (sLockMode == 5)
+    {
+        return;
+    }
+
+    res = AI_ACT_GUARDORDER();
+    if (res != -1)
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Showtime (Smart Triggering — Saves Showtime for Worthy Targets)
+// ============================================================================
+void ACT_Showtime(int aggressive)
+{
+    if (AI_CHK_SP_ATTACK() != 1)
+    {
+        return;
+    }
+
+    // Never auto-Showtime when a Treasure Demon is present (let the player knock down & capture it!)
+    if (sIsHouma == 1)
+    {
+        return;
+    }
+
+    // Trigger Showtime on: Bosses, Disaster Shadows,
+    // Full Assault (if at least one foe > 20% HP), or any healthy foe (> 50% HP)
+    if ((sIsBoss == 1) || (sIsUnstable == 1) || ((aggressive == 1) && (AI_CHK_ENALLHP(20) == 0)) || (AI_CHK_ENALLHP(50) == 0))
+    {
+        AI_ACT_SP_ATTACK();
+        if (sIsUnstable == 1)
+        {
+            AI_TAR_UNSTABLE();
+        }
+        else
+        {
+            AI_TAR_HPMAX();
+        }
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Revive Fallen Allies (Samarecarm > Recarm > Engine Fallback)
+// ============================================================================
+void ACT_Rez()
+{
+    int res;
+    int id;
+    int uid;
+
+    if ((sLockMode == 4) || (sLockMode == 7))
+    {
+        return;
+    }
+
+    // Fast O(1) exit when no party member is KO'd (0x00080000)
+    if (AI_CHK_FRBAD(0x00080000) == 0)
+    {
+        return;
+    }
+
+    // Prefer Samarecarm (311) over Recarm (310); prioritize Joker (1) first
+    if (AI_CHK_MYABLESKIL(311) == 1)
+    {
+        if (AI_CHK_FRIDBAD(1, 0x00080000) == 1)
+        {
+            uid = AI_GET_UNI(0, 1);
+            if (uid != -1)
+            {
+                AI_ACT_SKILL(311);
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+        }
+        id = 2;
+        while (id <= 10)
+        {
+            if (id != 8)
+            {
+                if (AI_CHK_FRIDBAD(id, 0x00080000) == 1)
+                {
+                    uid = AI_GET_UNI(0, id);
+                    if (uid != -1)
+                    {
+                        AI_ACT_SKILL(311);
+                        AI_TAR_UID(uid);
+                        sActionDone = 10;
+                        return;
+                    }
+                }
+            }
+            id = id + 1;
+        }
+    }
+    else if (AI_CHK_MYABLESKIL(310) == 1)
+    {
+        if (AI_CHK_FRIDBAD(1, 0x00080000) == 1)
+        {
+            uid = AI_GET_UNI(0, 1);
+            if (uid != -1)
+            {
+                AI_ACT_SKILL(310);
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+        }
+        id = 2;
+        while (id <= 10)
+        {
+            if (id != 8)
+            {
+                if (AI_CHK_FRIDBAD(id, 0x00080000) == 1)
+                {
+                    uid = AI_GET_UNI(0, id);
+                    if (uid != -1)
+                    {
+                        AI_ACT_SKILL(310);
+                        AI_TAR_UID(uid);
+                        sActionDone = 10;
+                        return;
+                    }
+                }
+            }
+            id = id + 1;
+        }
+    }
+
+    // Fallback to engine revival helper
+    res = AI_ACT_REZ();
+    if (res != -1)
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Tiered Party Healing (Arke Intelligence Style + Champion's Cup)
+//   proactive = 0: Act Freely (50% threshold; 65% for Morgana/Makoto)
+//   proactive = 1: Heal/Support (75% threshold)
+// ============================================================================
+void ACT_Heal(int proactive)
+{
+    int maxThresh;
+    int critThresh;
+    int id;
+    int uid;
+    int maxHp;
+    int hpPct;
+    int bestPct;
+    int worstChar;
+    int hurtCount;
+    int critCount;
+    int hasSingle;
+    int hasMulti;
+    int hasAilment;
+    int res;
+
+    if (sLockMode == 4)
+    {
+        return;
+    }
+
+    hasSingle = 0;
+    if ((AI_CHK_MYABLESKIL(300) == 1) || (AI_CHK_MYABLESKIL(301) == 1) || (AI_CHK_MYABLESKIL(302) == 1) || ((sLockMode != 3) && (AI_CHK_MYABLESKIL(183) == 1)))
+    {
+        hasSingle = 1;
+    }
+
+    hasMulti = 0;
+    if ((AI_CHK_MYABLESKIL(305) == 1) || (AI_CHK_MYABLESKIL(306) == 1) || (AI_CHK_MYABLESKIL(307) == 1) || ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1)))
+    {
+        hasMulti = 1;
+    }
+
+    if ((hasSingle == 0) && (hasMulti == 0))
+    {
+        return;
+    }
+
+    if (proactive == 1)
+    {
+        maxThresh = 75;
+        critThresh = 50;
+    }
+    else if (sIsHealerChar == 1)
+    {
+        maxThresh = 65;
+        critThresh = 40;
+    }
+    else
+    {
+        maxThresh = 50;
+        critThresh = 30;
+    }
+
+    // Single-pass exact 1%-precision HP scan (iterates 10 -> 1 with <= so Joker wins ties!)
+    worstChar = 0;
+    bestPct = 101;
+    hurtCount = 0;
+    critCount = 0;
+    id = 10;
+    while (id >= 1)
+    {
+        if (IsAllyAlive(id) == 1)
+        {
+            uid = AI_GET_UNI(0, id);
+            if (uid != -1)
+            {
+                maxHp = AI_GET_P_MAX_HP(uid);
+                if (maxHp > 0)
+                {
+                    hpPct = (100 * AI_GET_P_NOW_HP(uid)) / maxHp;
+                    if (hpPct <= maxThresh)
+                    {
+                        hurtCount = hurtCount + 1;
+                        if (hpPct <= critThresh)
+                        {
+                            critCount = critCount + 1;
+                        }
+                        if (hpPct <= bestPct)
+                        {
+                            bestPct = hpPct;
+                            worstChar = id;
+                        }
+                    }
+                }
+            }
+        }
+        id = id - 1;
+    }
+
+    if (hurtCount == 0)
+    {
+        return;
+    }
+
+    // O(1) check if party has any curable ailment (gives Salvation priority over Mediarahan)
+    hasAilment = AI_CHK_FRBAD(0x0FFF);
+
+    // 1. Multiple hurt allies -> prefer AoE heal
+    if ((hurtCount >= 2) && (hasMulti == 1))
+    {
+        if ((hasAilment == 1) && (sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
+        {
+            AI_ACT_SKILL(318); // Salvation
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((critCount >= 1) && (AI_CHK_MYABLESKIL(307) == 1))
+        {
+            AI_ACT_SKILL(307); // Mediarahan
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((critCount >= 1) && (sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
+        {
+            AI_ACT_SKILL(318); // Salvation
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(306) == 1)
+        {
+            AI_ACT_SKILL(306); // Mediarama
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(307) == 1)
+        {
+            AI_ACT_SKILL(307); // Mediarahan
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
+        {
+            AI_ACT_SKILL(318); // Salvation
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(305) == 1)
+        {
+            AI_ACT_SKILL(305); // Media
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 2. Single hurt ally (or no AoE heal) -> pick best single-target heal
+    if ((worstChar != 0) && (hasSingle == 1))
+    {
+        // Critical HP -> prefer Diarahan (302) first
+        if ((critCount >= 1) && (AI_CHK_MYABLESKIL(302) == 1))
+        {
+            AI_ACT_SKILL(302); // Diarahan
+            AI_TAR_UID(AI_GET_UNI(0, worstChar));
+            sActionDone = 10;
+            return;
+        }
+        // Champion's Cup (183): Med heal + Tarukaja (skip when Maruki locks Support mode 3!)
+        if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(183) == 1) && (AI_CHK_FRIDHOJO(worstChar, 0x01) == 0))
+        {
+            AI_ACT_SKILL(183); // Champion's Cup
+            AI_TAR_UID(AI_GET_UNI(0, worstChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(301) == 1)
+        {
+            AI_ACT_SKILL(301); // Diarama
+            AI_TAR_UID(AI_GET_UNI(0, worstChar));
+            sActionDone = 10;
+            return;
+        }
+        if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(183) == 1))
+        {
+            AI_ACT_SKILL(183); // Champion's Cup
+            AI_TAR_UID(AI_GET_UNI(0, worstChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(302) == 1)
+        {
+            AI_ACT_SKILL(302); // Diarahan
+            AI_TAR_UID(AI_GET_UNI(0, worstChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(300) == 1)
+        {
+            AI_ACT_SKILL(300); // Dia
+            AI_TAR_UID(AI_GET_UNI(0, worstChar));
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 3. Only AoE heals available (common for late-game Morgana/Makoto!) -> use AoE heal
+    if ((hasMulti == 1) && ((critCount >= 1) || (proactive == 1) || (worstChar == 1)))
+    {
+        if ((critCount >= 1) && (AI_CHK_MYABLESKIL(307) == 1))
+        {
+            AI_ACT_SKILL(307); // Mediarahan
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((critCount >= 1) && (sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
+        {
+            AI_ACT_SKILL(318); // Salvation
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(306) == 1)
+        {
+            AI_ACT_SKILL(306); // Mediarama
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(307) == 1)
+        {
+            AI_ACT_SKILL(307); // Mediarahan
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
+        {
+            AI_ACT_SKILL(318); // Salvation
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(305) == 1)
+        {
+            AI_ACT_SKILL(305); // Media
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Fallback to engine heal if urgent
+    if (critCount >= 1)
+    {
+        res = AI_ACT_HEAL(0);
+        if (res != -1)
+        {
+            sActionDone = 10;
+        }
+    }
+}
+
+// ============================================================================
+// Action: Emergency-Only Revival & Healing (for Conserve SP)
+// ============================================================================
+void ACT_EmergencyRezAndHeal()
+{
+    int id;
+    int critChar;
+    int critCount;
+
+    if (sLockMode == 4)
+    {
+        return;
+    }
+
+    // Always revive KO'd allies even under Conserve SP
+    ACT_Rez();
+    if (sActionDone != 0)
+    {
+        return;
+    }
+
+    critChar = 0;
+    critCount = 0;
+    id = 10;
+    while (id >= 1)
+    {
+        if (IsAllyAlive(id) == 1)
+        {
+            if (AI_CHK_FRIDHP(id, 30) == 1)
+            {
+                critCount = critCount + 1;
+                critChar = id; // Joker (1) checked last -> priority
+            }
+        }
+        id = id - 1;
+    }
+
+    if (critCount == 0)
+    {
+        return;
+    }
+
+    if (critCount >= 2)
+    {
+        if (AI_CHK_MYABLESKIL(306) == 1)
+        {
+            AI_ACT_SKILL(306);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(307) == 1)
+        {
+            AI_ACT_SKILL(307);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(305) == 1)
+        {
+            AI_ACT_SKILL(305);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
+        {
+            AI_ACT_SKILL(318);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    if (critChar != 0)
+    {
+        // Under Conserve SP, prefer cheaper Diarama (6 SP) before Champion's Cup (10 SP) / Diarahan (18 SP)
+        if (AI_CHK_MYABLESKIL(301) == 1)
+        {
+            AI_ACT_SKILL(301); // Diarama
+            AI_TAR_UID(AI_GET_UNI(0, critChar));
+            sActionDone = 10;
+            return;
+        }
+        if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(183) == 1))
+        {
+            AI_ACT_SKILL(183); // Champion's Cup
+            AI_TAR_UID(AI_GET_UNI(0, critChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(302) == 1)
+        {
+            AI_ACT_SKILL(302); // Diarahan
+            AI_TAR_UID(AI_GET_UNI(0, critChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(300) == 1)
+        {
+            AI_ACT_SKILL(300); // Dia
+            AI_TAR_UID(AI_GET_UNI(0, critChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(306) == 1)
+        {
+            AI_ACT_SKILL(306);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(307) == 1)
+        {
+            AI_ACT_SKILL(307);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(305) == 1)
+        {
+            AI_ACT_SKILL(305);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
+        {
+            AI_ACT_SKILL(318);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+}
+
+// ============================================================================
+// Action: 3-Family Party Ailment Curing (Baisudi / Patra / Energy / Amrita / Wings)
+// Uses SKILL.TBL combined bitmasks (0x0FFF, 0x0007, 0x01C8, 0x0E30) for O(1) fast-exit!
+// ============================================================================
+void ACT_CureAilment()
+{
+    int id;
+    int elemCount;    // 0x0007: Burn (0x01) | Freeze (0x02) | Shock (0x04)
+    int patraCount;   // 0x01C8: Dizzy (0x08) | Forget (0x40) | Hunger (0x80) | Sleep (0x100)
+    int energyCount;  // 0x0E30: Confuse (0x10) | Fear (0x20) | Rage (0x200) | Despair (0x400) | Brainwash (0x800)
+    int totalCount;
+    int elemChar;
+    int patraChar;
+    int energyChar;
+    int anyChar;
+    int res;
+
+    if ((sLockMode == 4) || (sLockMode == 7))
+    {
+        return;
+    }
+
+    // Instant O(1) fast-exit when no party member has any of the 12 curable ailments!
+    if (AI_CHK_FRBAD(0x0FFF) == 0)
+    {
+        return;
+    }
+
+    elemCount = 0;
+    patraCount = 0;
+    energyCount = 0;
+    elemChar = 0;
+    patraChar = 0;
+    energyChar = 0;
+    anyChar = 0;
+
+    // Scan 10 -> 1 so Joker (1) wins single-target priority! (3 COMM calls per live ally instead of 12)
+    id = 10;
+    while (id >= 1)
+    {
+        if (IsAllyAlive(id) == 1)
+        {
+            if (AI_CHK_FRIDBAD(id, 0x0007) == 1)
+            {
+                elemCount = elemCount + 1;
+                elemChar = id;
+                anyChar = id;
+            }
+            if (AI_CHK_FRIDBAD(id, 0x01C8) == 1)
+            {
+                patraCount = patraCount + 1;
+                patraChar = id;
+                anyChar = id;
+            }
+            if (AI_CHK_FRIDBAD(id, 0x0E30) == 1)
+            {
+                energyCount = energyCount + 1;
+                energyChar = id;
+                anyChar = id;
+            }
+        }
+        id = id - 1;
+    }
+
+    totalCount = elemCount + patraCount + energyCount;
+    if (totalCount == 0)
+    {
+        return;
+    }
+
+    // 1. Multiple ailments: prefer cheapest AoE cure covering all afflicted allies first
+    if (totalCount >= 2)
+    {
+        // Single-family AoE cures (8 SP) when they cover everyone afflicted
+        if ((energyCount == totalCount) && (AI_CHK_MYABLESKIL(327) == 1))
+        {
+            AI_ACT_SKILL(327); // Energy Shower (8 SP)
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((patraCount == totalCount) && (AI_CHK_MYABLESKIL(330) == 1))
+        {
+            AI_ACT_SKILL(330); // Me Patra (8 SP)
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((elemCount == totalCount) && (AI_CHK_MYABLESKIL(331) == 1))
+        {
+            AI_ACT_SKILL(331); // Mabaisudi (8 SP)
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        // Full-party multi-family cures: Wings of Wisdom (10 SP) > Amrita Shower (12 SP)
+        if (AI_CHK_MYABLESKIL(186) == 1)
+        {
+            AI_ACT_SKILL(186); // Wings of Wisdom
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(316) == 1)
+        {
+            AI_ACT_SKILL(316); // Amrita Shower
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        // Partial family AoE cures if no full-party cure is available
+        if ((energyCount >= 2) && (AI_CHK_MYABLESKIL(327) == 1))
+        {
+            AI_ACT_SKILL(327); // Energy Shower
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((patraCount >= 2) && (AI_CHK_MYABLESKIL(330) == 1))
+        {
+            AI_ACT_SKILL(330); // Me Patra
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if ((elemCount >= 2) && (AI_CHK_MYABLESKIL(331) == 1))
+        {
+            AI_ACT_SKILL(331); // Mabaisudi
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(318) == 1)
+        {
+            AI_ACT_SKILL(318); // Salvation
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 2. Single-target family cures (4 SP, prioritize dangerous mental ailments first!)
+    if ((energyCount >= 1) && (energyChar != 0))
+    {
+        if (AI_CHK_MYABLESKIL(328) == 1)
+        {
+            AI_ACT_SKILL(328); // Energy Drop
+            AI_TAR_UID(AI_GET_UNI(0, energyChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(327) == 1)
+        {
+            AI_ACT_SKILL(327); // Energy Shower
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    if ((patraCount >= 1) && (patraChar != 0))
+    {
+        if (AI_CHK_MYABLESKIL(325) == 1)
+        {
+            AI_ACT_SKILL(325); // Patra
+            AI_TAR_UID(AI_GET_UNI(0, patraChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(330) == 1)
+        {
+            AI_ACT_SKILL(330); // Me Patra
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    if ((elemCount >= 1) && (elemChar != 0))
+    {
+        if (AI_CHK_MYABLESKIL(329) == 1)
+        {
+            AI_ACT_SKILL(329); // Baisudi
+            AI_TAR_UID(AI_GET_UNI(0, elemChar));
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(331) == 1)
+        {
+            AI_ACT_SKILL(331); // Mabaisudi
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 3. Universal single/party cures fallback (Amrita Drop 6 SP > Wings 10 SP > Amrita Shower 12 SP > Salvation)
+    if ((anyChar != 0) && (AI_CHK_MYABLESKIL(315) == 1))
+    {
+        AI_ACT_SKILL(315); // Amrita Drop
+        AI_TAR_UID(AI_GET_UNI(0, anyChar));
+        sActionDone = 10;
+        return;
+    }
+    if (AI_CHK_MYABLESKIL(186) == 1)
+    {
+        AI_ACT_SKILL(186); // Wings of Wisdom
+        AI_TAR_RND();
+        sActionDone = 10;
+        return;
+    }
+    if (AI_CHK_MYABLESKIL(316) == 1)
+    {
+        AI_ACT_SKILL(316); // Amrita Shower
+        AI_TAR_RND();
+        sActionDone = 10;
+        return;
+    }
+    if (AI_CHK_MYABLESKIL(318) == 1)
+    {
+        AI_ACT_SKILL(318); // Salvation
+        AI_TAR_RND();
+        sActionDone = 10;
+        return;
+    }
+
+    // Engine fallback
+    res = AI_ACT_BADSTATE();
+    if (res != -1)
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Charge / Concentrate / Fighting Spirit / High Energy Setup
+// ============================================================================
+void ACT_ChargeConcentrate(int aggressive)
+{
+    int enemyHealthy;
+    int canUse;
+
+    if (sLockMode == 3)
+    {
+        return;
+    }
+
+    // Don't waste Charge/Concentrate on normal mobs if all foes <= 50% HP
+    enemyHealthy = 0;
+    if ((sIsBoss == 1) || (AI_CHK_ENALLHP(50) == 0))
+    {
+        enemyHealthy = 1;
+    }
+    if (enemyHealthy == 0)
+    {
+        return;
+    }
+
+    // Never waste a 1-More / Baton Pass damage boost on Charge/Concentrate!
+    if (AI_CHK_MORE() == 1)
+    {
+        return;
+    }
+
+    // Bosses: always set up Charge/Concentrate. Normal mobs: 50% in Full Assault, 30% in Act Freely.
+    canUse = 0;
+    if (sIsBoss == 1)
+    {
+        canUse = 1;
+    }
+    else if (aggressive == 1)
+    {
+        if (RND(100) < 50)
+        {
+            canUse = 1;
+        }
+    }
+    else if (RND(100) < 30)
+    {
+        canUse = 1;
+    }
+
+    if (canUse == 0)
+    {
+        return;
+    }
+
+    // Party-wide Charge: Fighting Spirit (290, 80 SP, Ryuji 3rd sem)
+    if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
+    {
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+        {
+            AI_ACT_SKILL(290);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Party-wide Concentrate: High Energy (294, 80 SP, Ann 3rd sem)
+    if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(294) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
+    {
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+        {
+            AI_ACT_SKILL(294);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Self Charge (360)
+    if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(360) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
+    {
+        if ((sMyHpPct > 40) && ((aggressive == 1) || (sMySpPct >= 20)))
+        {
+            AI_ACT_SKILL(360);
+            AI_TAR_MINE();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Self Concentrate (361)
+    if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(361) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
+    {
+        if ((aggressive == 1) || (sMySpPct >= 25))
+        {
+            AI_ACT_SKILL(361);
+            AI_TAR_MINE();
+            sActionDone = 10;
+            return;
+        }
+    }
+}
+
+// ============================================================================
+// Action: Full 10-Element 1-More Weakness Exploit (Includes Phys 0 & Gun 1!)
+// ============================================================================
+void ACT_1MoreWeakness(int aggressive)
+{
+    int attr;
+    int uid;
+    int singleOnly;
+    int skill;
+    int res;
+    int skipAttr;
+
+    if (sNo1MoreFlag == 1)
+    {
+        return;
+    }
+
+    // Preserve vanilla Mouse/Gluttony check & check if standing enemies exist
+    if ((AI_CHK_FRIDBAD(1, 0x00200000) == 1) || (sDownCount >= sEnemyCount))
+    {
+        return;
+    }
+
+    // 1. Free Gun knockdown on standing Gun-weak enemy (saves SP!)
+    if ((sLockMode != 1) && (AI_GET_BULLET() > 0))
+    {
+        uid = AI_GET_UNIWEAK_ST(1);
+        if (uid != -1)
+        {
+            if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+            {
+                if (sMyCharId != 7)
+                {
+                    AI_ACT_GUN();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+                else if (IsHaruGunSafe() == 1)
+                {
+                    AI_ACT_GUN();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+    }
+
+    // 2. Engine melee-weakness check (Phys-weak standing enemy)
+    if ((sLockMode != 1) && (sNotPhysical == 0))
+    {
+        res = AI_ACT_ATTACK_WEAK(0);
+        if (res != -1)
+        {
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 3. Bug fix over vanilla: scan ALL 10 affinities 0..9 (Phys, Gun, Fire..Curse)
+    attr = 0;
+    while (attr <= 9)
+    {
+        skipAttr = 0;
+        // Respect Maruki lockouts & flying enemies
+        if (((attr == 0) || (attr == 1)) && ((sLockMode == 1) || ((attr == 0) && (sNotPhysical == 1))))
+        {
+            skipAttr = 1;
+        }
+        if ((attr >= 2) && (sLockMode == 2))
+        {
+            skipAttr = 1;
+        }
+        // Respect HP safety for HP-cost Phys (0) & Gun (1) skills
+        if (((attr == 0) || (attr == 1)) && (sMyHpPct <= 30) && (aggressive == 0))
+        {
+            skipAttr = 1;
+        }
+
+        if (skipAttr == 0)
+        {
+            uid = AI_GET_UNIWEAK_ST(attr);
+            if (uid != -1)
+            {
+                if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1)
+                {
+                    if (IsAoESafeForAttr(attr) == 1)
+                    {
+                        singleOnly = 0;
+                    }
+                    else
+                    {
+                        singleOnly = 1;
+                    }
+
+                    skill = AI_GET_UNIBESTATTRSKIL(uid, attr, singleOnly);
+                    if (skill > 0)
+                    {
+                        sTargetUid = uid;
+                        sSkillId = skill;
+                        sActionDone = 1;
+                        return;
+                    }
+                }
+            }
+        }
+
+        attr = attr + 1;
+    }
+}
+
+// ============================================================================
+// Action: Smart Baton Pass (Weakness -> Technical -> Emergency Heal -> Charged/Joker)
+// ============================================================================
+void ACT_Takeover()
+{
+    int id;
+    int critLow;
+
+    if (sLockMode == 6)
+    {
+        return;
+    }
+
+    if (AI_CHK_MORE() != 1)
+    {
+        return;
+    }
+
+    // Priority 1: Pass to a capable ally who can knock down a standing enemy
+    id = 2;
+    while (id <= 10)
+    {
+        if (id != 8)
+        {
+            if (IsAllyCapable(id) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(id) == 1) && (AI_CHK_ABLEWEAK(id) == 1))
+                {
+                    AI_ACT_TAKEOVER(id);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+        id = id + 1;
+    }
+    if (IsAllyCapable(1) == 1)
+    {
+        if ((AI_CHK_TAKEOVER(1) == 1) && (AI_CHK_ABLEWEAK(1) == 1))
+        {
+            AI_ACT_TAKEOVER(1);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Priority 2: Pass to a capable ally who can trigger a Technical attack!
+    id = 2;
+    while (id <= 10)
+    {
+        if (id != 8)
+        {
+            if (IsAllyCapable(id) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(id) == 1) && (AI_CHK_FRIDTECH(id) == 1))
+                {
+                    AI_ACT_TAKEOVER(id);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+        id = id + 1;
+    }
+    if (IsAllyCapable(1) == 1)
+    {
+        if ((AI_CHK_TAKEOVER(1) == 1) && (AI_CHK_FRIDTECH(1) == 1))
+        {
+            AI_ACT_TAKEOVER(1);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Priority 3: If an ally is critically low (<= 40% HP) and healing isn't locked, pass to a healer
+    // Computed lazily here (only on 1-More turns!) instead of every turn in Initialize().
+    if (sLockMode != 4)
+    {
+        critLow = 0;
+        id = 1;
+        while ((id <= 10) && (critLow == 0))
+        {
+            if (IsAllyAlive(id) == 1)
+            {
+                if (AI_CHK_FRIDHP(id, 40) == 1)
+                {
+                    critLow = 1;
+                }
+            }
+            id = id + 1;
+        }
+        if (critLow == 1)
+        {
+            if (IsAllyCapable(3) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(3) == 1) && (AI_CHK_FRIDHREC(3) == 1))
+                {
+                    AI_ACT_TAKEOVER(3);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+            if (IsAllyCapable(6) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(6) == 1) && (AI_CHK_FRIDHREC(6) == 1))
+                {
+                    AI_ACT_TAKEOVER(6);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+            if (IsAllyCapable(4) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(4) == 1) && (AI_CHK_FRIDHREC(4) == 1))
+                {
+                    AI_ACT_TAKEOVER(4);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+            if (IsAllyCapable(1) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(1) == 1) && (AI_CHK_FRIDHREC(1) == 1))
+                {
+                    AI_ACT_TAKEOVER(1);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+    }
+
+    // Priority 4: Don't waste Baton Pass boost — pass to a Charged/Concentrated ally or Joker!
+    // (Skip if acting character is already Charged/Concentrated (0x0300) so they unleash their own nuke!)
+    if (AI_CHK_MYHOJO(0x0300) == 0)
+    {
+        // Pass to a Charged or Concentrated ally first
+        id = 2;
+        while (id <= 10)
+        {
+            if (id != 8)
+            {
+                if (IsAllyCapable(id) == 1)
+                {
+                    if (AI_CHK_TAKEOVER(id) == 1)
+                    {
+                        if (AI_CHK_FRIDHOJO(id, 0x0300) == 1)
+                        {
+                            AI_ACT_TAKEOVER(id);
+                            sActionDone = 10;
+                            return;
+                        }
+                    }
+                }
+            }
+            id = id + 1;
+        }
+
+        // Pass to Joker (Wild Card flexibility + Baton Pass damage boost)
+        if (IsAllyCapable(1) == 1)
+        {
+            if (AI_CHK_TAKEOVER(1) == 1)
+            {
+                AI_ACT_TAKEOVER(1);
+                sActionDone = 10;
+                return;
+            }
+        }
+
+        // In Full Assault or Heal/Support, chain Baton Pass to heaviest hitters first
+        // Priority: Ryuji (2) > Ann (4) > Yusuke (5) > Akechi (9) > Sumire (10) > Haru (7) > Makoto (6) > Morgana (3)
+        if ((sOrder == 1) || (sOrder == 3))
+        {
+            if (IsAllyCapable(2) == 1)  { if (AI_CHK_TAKEOVER(2) == 1)  { AI_ACT_TAKEOVER(2);  sActionDone = 10; return; } }
+            if (IsAllyCapable(4) == 1)  { if (AI_CHK_TAKEOVER(4) == 1)  { AI_ACT_TAKEOVER(4);  sActionDone = 10; return; } }
+            if (IsAllyCapable(5) == 1)  { if (AI_CHK_TAKEOVER(5) == 1)  { AI_ACT_TAKEOVER(5);  sActionDone = 10; return; } }
+            if (IsAllyCapable(9) == 1)  { if (AI_CHK_TAKEOVER(9) == 1)  { AI_ACT_TAKEOVER(9);  sActionDone = 10; return; } }
+            if (IsAllyCapable(10) == 1) { if (AI_CHK_TAKEOVER(10) == 1) { AI_ACT_TAKEOVER(10); sActionDone = 10; return; } }
+            if (IsAllyCapable(7) == 1)  { if (AI_CHK_TAKEOVER(7) == 1)  { AI_ACT_TAKEOVER(7);  sActionDone = 10; return; } }
+            if (IsAllyCapable(6) == 1)  { if (AI_CHK_TAKEOVER(6) == 1)  { AI_ACT_TAKEOVER(6);  sActionDone = 10; return; } }
+            if (IsAllyCapable(3) == 1)  { if (AI_CHK_TAKEOVER(3) == 1)  { AI_ACT_TAKEOVER(3);  sActionDone = 10; return; } }
+        }
+    }
+}
+
+// ============================================================================
+// Action: Technical Combos + Akechi Rebellion Blade on Downed Enemies
+// ============================================================================
+void ACT_Technical()
+{
+    int res;
+
+    // Akechi's 3rd-semester Rebellion Blade (297): colossal Almighty bonus on Downed foes!
+    if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(297) == 1) && (AI_CHK_ENBAD(0x00100000) == 1))
+    {
+        AI_ACT_SKILL(297);
+        AI_TAR_BAD(0x00100000);
+        sActionDone = 10;
+        return;
+    }
+
+    if ((sLockMode == 1) || (sLockMode == 2))
+    {
+        return;
+    }
+
+    res = AI_ACT_TECHNICAL();
+    if (res != -1)
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Gun Finisher & Gun Weakness Knockdown
+// ============================================================================
+void ACT_KillEnemy_Gun()
+{
+    int uid;
+
+    if ((sLockMode == 1) || (AI_GET_BULLET() <= 0))
+    {
+        return;
+    }
+
+    // Haru's Grenade Launcher is AoE — verify safety against Disaster Shadows & Gun immunity
+    if (sMyCharId == 7)
+    {
+        if (IsHaruGunSafe() == 0)
+        {
+            return;
+        }
+    }
+
+    // Bug fix over vanilla: prefer low-HP Gun-weak target first, then normal low-HP target
+    uid = AI_GET_UNIWEAKHPMIN(1);
+    if (uid != -1)
+    {
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHP(uid, 35) == 1))
+        {
+            AI_ACT_GUN();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    uid = AI_GET_UNINOMALHPMIN(1);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIHP(uid, 25) == 1)
+        {
+            AI_ACT_GUN();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+}
+
+void ACT_GunWeakOrKill()
+{
+    int uid;
+
+    if ((sLockMode == 1) || (sNo1MoreFlag == 1) || (AI_GET_BULLET() <= 0))
+    {
+        return;
+    }
+
+    if (sMyCharId == 7)
+    {
+        if (IsHaruGunSafe() == 0)
+        {
+            return;
+        }
+    }
+
+    // 1. Standing Gun-weak enemy for 1 More
+    uid = AI_GET_UNIWEAK_ST(1);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        {
+            AI_ACT_GUN();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 2. Low-HP finisher
+    ACT_KillEnemy_Gun();
+}
+
+void ACT_GunSmart()
+{
+    int uid;
+
+    if ((sLockMode == 1) || (sNo1MoreFlag == 1) || (AI_GET_BULLET() <= 0))
+    {
+        return;
+    }
+
+    // Haru's AoE Grenade Launcher needs AoE safety
+    if (sMyCharId == 7)
+    {
+        if (IsHaruGunSafe() == 0)
+        {
+            return;
+        }
+    }
+
+    // Bug fix over vanilla: do NOT globally abort Gun just because a *different* enemy resists Gun!
+    // Check standing Gun-weak -> any Gun-weak -> normal-damage single target -> unanalyzed target.
+    uid = AI_GET_UNIWEAK_ST(1);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        {
+            AI_ACT_GUN();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    uid = AI_GET_UNIWEAK(1);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        {
+            AI_ACT_GUN();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Avoid wasting bullets on Disaster Shadows when melee/skills can pick cleanly
+    if (sIsUnstable == 1)
+    {
+        return;
+    }
+
+    uid = AI_GET_UNINOMALHPMIN(1);
+    if (uid != -1)
+    {
+        AI_ACT_GUN();
+        AI_TAR_UID(uid);
+        sActionDone = 10;
+        return;
+    }
+}
+
+// ============================================================================
+// Action: Urgent Dispel (Dekaja on Buffed Boss/Foes, Dekunda on Debuffed Party)
+// ============================================================================
+void ACT_UrgentDispel()
+{
+    if (sLockMode == 3)
+    {
+        return;
+    }
+
+    // Dekaja (356): combined bitmask 0x55 = AtkUp(0x01)|EvaUp(0x04)|DefUp(0x10)|AccUp(0x40) (1 COMM call!)
+    if (AI_CHK_MYABLESKIL(356) == 1)
+    {
+        if (AI_CHK_ENHOJO(0x55) == 1)
+        {
+            AI_ACT_SKILL(356);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Dekunda (355): combined bitmask 0xAA = AtkDown(0x02)|EvaDown(0x08)|DefDown(0x20)|AccDown(0x80) (1 COMM call!)
+    if (AI_CHK_MYABLESKIL(355) == 1)
+    {
+        if (AI_CHK_FRHOJO(0xAA) == 1)
+        {
+            AI_ACT_SKILL(355);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+}
+
+// ============================================================================
+// Helper: Pick best un-Concentrated Magic ally for President's Insight (187)
+// Priority: Ann (4) > Makoto (6) > Haru (7) > Morgana (3) > Akechi (9) > Joker (1)
+// (Nested guards prevent non-short-circuit evaluation on benched allies!)
+// ============================================================================
+int PickConcentrateAlly()
+{
+    if (IsAllyCapable(4) == 1) { if (AI_CHK_FRIDHOJO(4, 0x0200) == 0) { return 4; } }
+    if (IsAllyCapable(6) == 1) { if (AI_CHK_FRIDHOJO(6, 0x0200) == 0) { return 6; } }
+    if (IsAllyCapable(7) == 1) { if (AI_CHK_FRIDHOJO(7, 0x0200) == 0) { return 7; } }
+    if (IsAllyCapable(3) == 1) { if (AI_CHK_FRIDHOJO(3, 0x0200) == 0) { return 3; } }
+    if (IsAllyCapable(9) == 1) { if (AI_CHK_FRIDHOJO(9, 0x0200) == 0) { return 9; } }
+    if (IsAllyCapable(1) == 1) { if (AI_CHK_FRIDHOJO(1, 0x0200) == 0) { return 1; } }
+    return 0;
+}
+
+// ============================================================================
+// Helper: Pick best un-Charged Physical ally for Tyrant's Will (189)
+// Priority: Ryuji (2) > Sumire (10) > Yusuke (5) > Akechi (9) > Haru (7) > Joker (1)
+// ============================================================================
+int PickChargeAlly()
+{
+    if (IsAllyCapable(2) == 1)  { if (AI_CHK_FRIDHOJO(2, 0x0100) == 0)  { return 2; } }
+    if (IsAllyCapable(10) == 1) { if (AI_CHK_FRIDHOJO(10, 0x0100) == 0) { return 10; } }
+    if (IsAllyCapable(5) == 1)  { if (AI_CHK_FRIDHOJO(5, 0x0100) == 0)  { return 5; } }
+    if (IsAllyCapable(9) == 1)  { if (AI_CHK_FRIDHOJO(9, 0x0100) == 0)  { return 9; } }
+    if (IsAllyCapable(7) == 1)  { if (AI_CHK_FRIDHOJO(7, 0x0100) == 0)  { return 7; } }
+    if (IsAllyCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x0100) == 0)  { return 1; } }
+    return 0;
+}
+
+// ============================================================================
+// Helper: Pick best un-shielded ally for Bleeding Dry Brush (184)
+// Priority: Joker (1) -> alive ally without Universal Drain (HOJO2 bit 2)
+// ============================================================================
+int PickDrainBarrierAlly()
+{
+    int id;
+    if (IsAllyAlive(1) == 1)
+    {
+        if (AI_CHK_FRIDHOJO2(1, 2) == 0)
+        {
+            return 1;
+        }
+    }
+    id = 2;
+    while (id <= 10)
+    {
+        if (id != 8)
+        {
+            if (IsAllyAlive(id) == 1)
+            {
+                if (AI_CHK_FRIDHOJO2(id, 2) == 0)
+                {
+                    return id;
+                }
+            }
+        }
+        id = id + 1;
+    }
+    return 0;
+}
+
+// ============================================================================
+// Helper: Pick alive ally missing HOJO bit `mask` (Joker first, ignores KO'd allies!)
+// Prevents dead-ally buff spam and guarantees valid single-target buff targeting.
+// ============================================================================
+int PickAllyWithoutHojo(int mask)
+{
+    int id;
+    if (IsAllyAlive(1) == 1)
+    {
+        if (AI_CHK_FRIDHOJO(1, mask) == 0)
+        {
+            return 1;
+        }
+    }
+    id = 2;
+    while (id <= 10)
+    {
+        if (id != 8)
+        {
+            if (IsAllyAlive(id) == 1)
+            {
+                if (AI_CHK_FRIDHOJO(id, mask) == 0)
+                {
+                    return id;
+                }
+            }
+        }
+        id = id + 1;
+    }
+    return 0;
+}
+
+// ============================================================================
+// Action: Full Buff / Debuff / Shield / 3rd-Semester / Will Seed Ring Support
+//   guaranteed = 1 in Heal/Support (includes party Charge/Concentrate & Ring gifts)
+// ============================================================================
+void ACT_Support(int guaranteed)
+{
+    int allyId;
+    int res;
+
+    if (sLockMode == 3)
+    {
+        return;
+    }
+
+    // 1. Urgent dispels (Dekaja / Dekunda)
+    ACT_UrgentDispel();
+    if (sActionDone != 0)
+    {
+        return;
+    }
+
+    // 2. Party-wide All-Stat Debuff: Checkmate (292, 90 SP, Makoto 3rd sem)
+    if (AI_CHK_MYABLESKIL(292) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x02) == 1) || (AI_CHK_NOTENHOJO(0x20) == 1) || (AI_CHK_NOTENHOJO(0x08) == 1))
+        {
+            if ((sIsBoss == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+            {
+                if ((sEnemyCount >= 2) || (AI_CHK_MYABLESKIL(348) == 0))
+                {
+                    AI_ACT_SKILL(292);
+                    AI_TAR_RND();
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+    }
+
+    // 3. Single-target All-Stat Debuff: Debilitate (348)
+    if (AI_CHK_MYABLESKIL(348) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x20) == 1) && (AI_CHK_NOTENHOJO(0x02) == 1))
+        {
+            AI_ACT_SKILL(348);
+            AI_TAR_NOTHOJO(0x20);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 4. Individual & AoE Debuffs (Defense Down > Attack Down > Agility Down)
+    // Marakunda (351) / Rakunda (346)
+    if (AI_CHK_NOTENHOJO(0x20) == 1)
+    {
+        if ((AI_CHK_MYABLESKIL(351) == 1) && (sEnemyCount >= 2))
+        {
+            AI_ACT_SKILL(351);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(346) == 1)
+        {
+            AI_ACT_SKILL(346);
+            AI_TAR_NOTHOJO(0x20);
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(351) == 1)
+        {
+            AI_ACT_SKILL(351);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Matarunda (350) / Tarunda (345)
+    if (AI_CHK_NOTENHOJO(0x02) == 1)
+    {
+        if ((AI_CHK_MYABLESKIL(350) == 1) && (sEnemyCount >= 2))
+        {
+            AI_ACT_SKILL(350);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(345) == 1)
+        {
+            AI_ACT_SKILL(345);
+            AI_TAR_NOTHOJO(0x02);
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(350) == 1)
+        {
+            AI_ACT_SKILL(350);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Masukunda (352) / Sukunda (347)
+    if (AI_CHK_NOTENHOJO(0x08) == 1)
+    {
+        if ((AI_CHK_MYABLESKIL(352) == 1) && (sEnemyCount >= 2))
+        {
+            AI_ACT_SKILL(352);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(347) == 1)
+        {
+            AI_ACT_SKILL(347);
+            AI_TAR_NOTHOJO(0x08);
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(352) == 1)
+        {
+            AI_ACT_SKILL(352);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 5. Party-wide All-Stat Buffs: Hyakka Ryouran (293, 90 SP, Yusuke 3rd sem) / Thermopylae (343)
+    if ((AI_CHK_MYABLESKIL(293) == 1) || (AI_CHK_MYABLESKIL(343) == 1))
+    {
+        allyId = PickAllyWithoutHojo(0x01);
+        if (allyId == 0) { allyId = PickAllyWithoutHojo(0x10); }
+        if (allyId == 0) { allyId = PickAllyWithoutHojo(0x04); }
+        if (allyId != 0)
+        {
+            if (AI_CHK_MYABLESKIL(293) == 1)
+            {
+                if ((sIsBoss == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+                {
+                    AI_ACT_SKILL(293); // Hyakka Ryouran
+                    AI_TAR_RND();
+                    sActionDone = 10;
+                    return;
+                }
+            }
+            if (AI_CHK_MYABLESKIL(343) == 1)
+            {
+                AI_ACT_SKILL(343); // Thermopylae (only usable when surrounded — AI_CHK_MYABLESKIL enforces!)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    // 6. Party & Single Stat Buffs (Matarukaja/Tarukaja, Marakukaja/VaultGuardian/Rakukaja, Masukukaja/Gambler/Sukukaja, Heat Riser)
+    // Uses PickAllyWithoutHojo so KO'd allies never cause infinite buff spam & Joker gets priority!
+    if ((AI_CHK_MYABLESKIL(340) == 1) || (AI_CHK_MYABLESKIL(335) == 1))
+    {
+        allyId = PickAllyWithoutHojo(0x01);
+        if (allyId != 0)
+        {
+            if (AI_CHK_MYABLESKIL(340) == 1)
+            {
+                AI_ACT_SKILL(340); // Matarukaja
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(335) == 1)
+            {
+                AI_ACT_SKILL(335); // Tarukaja
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    if ((AI_CHK_MYABLESKIL(341) == 1) || (AI_CHK_MYABLESKIL(185) == 1) || (AI_CHK_MYABLESKIL(336) == 1))
+    {
+        allyId = PickAllyWithoutHojo(0x10);
+        if (allyId != 0)
+        {
+            if (AI_CHK_MYABLESKIL(341) == 1)
+            {
+                AI_ACT_SKILL(341); // Marakukaja
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(185) == 1)
+            {
+                AI_ACT_SKILL(185); // Vault Guardian (Ring of Gluttony)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(336) == 1)
+            {
+                AI_ACT_SKILL(336); // Rakukaja
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    if ((AI_CHK_MYABLESKIL(342) == 1) || (AI_CHK_MYABLESKIL(188) == 1) || (AI_CHK_MYABLESKIL(337) == 1))
+    {
+        allyId = PickAllyWithoutHojo(0x04);
+        if (allyId != 0)
+        {
+            if (AI_CHK_MYABLESKIL(342) == 1)
+            {
+                AI_ACT_SKILL(342); // Masukukaja
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(188) == 1)
+            {
+                AI_ACT_SKILL(188); // Gambler's Foresight (Ring of Envy)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(337) == 1)
+            {
+                AI_ACT_SKILL(337); // Sukukaja
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    // Heat Riser (338)
+    if (AI_CHK_MYABLESKIL(338) == 1)
+    {
+        allyId = PickAllyWithoutHojo(0x01);
+        if (allyId == 0) { allyId = PickAllyWithoutHojo(0x10); }
+        if (allyId != 0)
+        {
+            AI_ACT_SKILL(338);
+            AI_TAR_UID(AI_GET_UNI(0, allyId));
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 7. Party Charge/Concentrate under Heal/Support (Fighting Spirit 290, High Energy 294 — 80 SP)
+    if ((guaranteed == 1) && (AI_CHK_MORE() == 0))
+    {
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+        {
+            if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1) && (AI_CHK_FRHOJO(0x0100) == 0))
+            {
+                AI_ACT_SKILL(290); // Fighting Spirit
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(294) == 1) && (AI_CHK_FRHOJO(0x0200) == 0))
+            {
+                AI_ACT_SKILL(294); // High Energy
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    // 8. Critical Rate Buffs: Brave Step (303 -> HOJO 0x1000), Revolution (366 -> 0x2000), Rebellion (365 -> 0x1000)
+    if (AI_CHK_MYABLESKIL(303) == 1)
+    {
+        allyId = PickAllyWithoutHojo(0x1000);
+        if (allyId != 0)
+        {
+            if (PickAllyWithoutHojo(0x2000) != 0)
+            {
+                AI_ACT_SKILL(303); // Brave Step
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+    if (AI_CHK_MYABLESKIL(366) == 1)
+    {
+        if (PickAllyWithoutHojo(0x2000) != 0)
+        {
+            AI_ACT_SKILL(366); // Revolution
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+    if (AI_CHK_MYABLESKIL(365) == 1)
+    {
+        allyId = PickAllyWithoutHojo(0x1000);
+        if (allyId != 0)
+        {
+            AI_ACT_SKILL(365); // Rebellion
+            AI_TAR_UID(AI_GET_UNI(0, allyId));
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 9. Barriers & Shields: Life Wall (296, 95 SP), Bleeding Dry Brush (184), Tetrakarn (370), Makarakarn (371), Tetraja (372)
+    // Skip Karn repel shields (Life Wall / Tetrakarn / Makarakarn) against The Reaper (Enemy ID 190)
+    // so allies never trigger The Reaper's infinite Concentrate -> Megidolaon wipe loop!
+    // (Skill ownership checked FIRST in nested if so non-owners skip all enemy/HOJO COMM calls!)
+    if (AI_CHK_MYABLESKIL(296) == 1)
+    {
+        if ((AI_CHK_ENID(190) == 0) && (AI_CHK_FRHOJO(0xC000) == 0))
+        {
+            if ((sIsBoss == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 60)))
+            {
+                AI_ACT_SKILL(296); // Life Wall (Haru 3rd sem)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+    if (AI_CHK_MYABLESKIL(184) == 1)
+    {
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 35)))
+        {
+            allyId = PickDrainBarrierAlly();
+            if (allyId != 0)
+            {
+                AI_ACT_SKILL(184); // Bleeding Dry Brush (Ring of Vanity)
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+    if ((AI_CHK_MYABLESKIL(370) == 1) || (AI_CHK_MYABLESKIL(371) == 1))
+    {
+        if ((AI_CHK_ENID(190) == 0) && ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 40))))
+        {
+            if (AI_CHK_MYABLESKIL(370) == 1)
+            {
+                allyId = PickAllyWithoutHojo(0x4000);
+                if (allyId != 0)
+                {
+                    AI_ACT_SKILL(370); // Tetrakarn
+                    AI_TAR_UID(AI_GET_UNI(0, allyId));
+                    sActionDone = 10;
+                    return;
+                }
+            }
+            if (AI_CHK_MYABLESKIL(371) == 1)
+            {
+                allyId = PickAllyWithoutHojo(0x8000);
+                if (allyId != 0)
+                {
+                    AI_ACT_SKILL(371); // Makarakarn
+                    AI_TAR_UID(AI_GET_UNI(0, allyId));
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+    }
+    if (AI_CHK_MYABLESKIL(372) == 1)
+    {
+        if (PickAllyWithoutHojo(0x02000000) != 0)
+        {
+            AI_ACT_SKILL(372); // Tetraja
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 10. Elemental Breaks when enemies resist/null/repel/absorb that element
+    // Verified directly from SKILL.TBL: Fire=0x01, Ice=0x02, Wind(387)=0x04, Elec(388)=0x08, Nuke(395)=0x10, Psy(396)=0x20 (<< 16)
+    // Nested AI_CHK_MYABLESKIL avoids 30 wasted IsAttrImpeded/NOTENHOJO COMM calls when character lacks Break skills!
+    if (AI_CHK_MYABLESKIL(385) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x00010000) == 1) && (IsAttrImpeded(2) == 1))
+        {
+            AI_ACT_SKILL(385); // Fire Break
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+    if (AI_CHK_MYABLESKIL(386) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x00020000) == 1) && (IsAttrImpeded(3) == 1))
+        {
+            AI_ACT_SKILL(386); // Ice Break
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+    if (AI_CHK_MYABLESKIL(388) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x00080000) == 1) && (IsAttrImpeded(4) == 1))
+        {
+            AI_ACT_SKILL(388); // Elec Break (SKILL.TBL bit 0x00080000!)
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+    if (AI_CHK_MYABLESKIL(387) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x00040000) == 1) && (IsAttrImpeded(5) == 1))
+        {
+            AI_ACT_SKILL(387); // Wind Break (SKILL.TBL bit 0x00040000!)
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+    if (AI_CHK_MYABLESKIL(396) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x00200000) == 1) && (IsAttrImpeded(6) == 1))
+        {
+            AI_ACT_SKILL(396); // Psy Break
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+    if (AI_CHK_MYABLESKIL(395) == 1)
+    {
+        if ((AI_CHK_NOTENHOJO(0x00100000) == 1) && (IsAttrImpeded(7) == 1))
+        {
+            AI_ACT_SKILL(395); // Nuke Break
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 11. Will Seed Ring Charge/Concentrate gifts (only when foes are still healthy!)
+    if ((sIsBoss == 1) || (AI_CHK_ENALLHP(35) == 0))
+    {
+        if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(187) == 1))
+        {
+            allyId = PickConcentrateAlly();
+            if (allyId != 0)
+            {
+                AI_ACT_SKILL(187); // President's Insight (Ring of Greed -> Concentrate)
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
+                sActionDone = 10;
+                return;
+            }
+        }
+        if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(189) == 1))
+        {
+            allyId = PickChargeAlly();
+            if (allyId != 0)
+            {
+                AI_ACT_SKILL(189); // Tyrant's Will (Ring of Pride -> Charge)
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    // 12. Remaining Debilitate partial debuff (even if only 1 of 3 stats missing)
+    if (AI_CHK_MYABLESKIL(348) == 1)
+    {
+        if (AI_CHK_NOTENHOJO(0x20) == 1)
+        {
+            AI_ACT_SKILL(348);
+            AI_TAR_NOTHOJO(0x20);
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_NOTENHOJO(0x02) == 1)
+        {
+            AI_ACT_SKILL(348);
+            AI_TAR_NOTHOJO(0x02);
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_NOTENHOJO(0x08) == 1)
+        {
+            AI_ACT_SKILL(348);
+            AI_TAR_NOTHOJO(0x08);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Engine debuff fallback
+    if (guaranteed == 1)
+    {
+        res = AI_ACT_DEBUFF(0);
+        if (res != -1)
+        {
+            sActionDone = 10;
+        }
+    }
+}
+
+// ============================================================================
+// Action: Uniform Random Buff/Debuff Refresh (Heal/Support Maintenance)
+// Zero arrays -> zero compiler warnings, exact uniform distribution!
+// ============================================================================
+void ACT_SupportRefresh()
+{
+    int numAvail;
+    int pick;
+    int idx;
+    int chosen;
+
+    if (sLockMode == 3)
+    {
+        return;
+    }
+
+    // Only proactively refresh timers on bosses, or on healthy fights with spare SP (prevents trash-mob SP drain!)
+    if (sIsBoss == 0)
+    {
+        if ((AI_CHK_ENALLHP(35) == 1) || (sMySpPct < 35) || (RND(100) >= 50))
+        {
+            return;
+        }
+    }
+    else if (sMySpPct < 20)
+    {
+        return;
+    }
+
+    // Pass 1: count usable refreshable buff/debuff skills (90-SP 3rd-sem skills only refreshed on bosses)
+    numAvail = 0;
+    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(292) == 1)) { numAvail = numAvail + 1; } // Checkmate
+    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(293) == 1)) { numAvail = numAvail + 1; } // Hyakka Ryouran
+    if (AI_CHK_MYABLESKIL(348) == 1) { numAvail = numAvail + 1; } // Debilitate
+    if (AI_CHK_MYABLESKIL(338) == 1) { numAvail = numAvail + 1; } // Heat Riser
+    if (AI_CHK_MYABLESKIL(340) == 1) { numAvail = numAvail + 1; } // Matarukaja
+    if (AI_CHK_MYABLESKIL(341) == 1) { numAvail = numAvail + 1; } // Marakukaja
+    if (AI_CHK_MYABLESKIL(342) == 1) { numAvail = numAvail + 1; } // Masukukaja
+    if (AI_CHK_MYABLESKIL(185) == 1) { numAvail = numAvail + 1; } // Vault Guardian
+    if (AI_CHK_MYABLESKIL(188) == 1) { numAvail = numAvail + 1; } // Gambler's Foresight
+    if (AI_CHK_MYABLESKIL(350) == 1) { numAvail = numAvail + 1; } // Matarunda
+    if (AI_CHK_MYABLESKIL(351) == 1) { numAvail = numAvail + 1; } // Marakunda
+    if (AI_CHK_MYABLESKIL(352) == 1) { numAvail = numAvail + 1; } // Masukunda
+    if (AI_CHK_MYABLESKIL(335) == 1) { numAvail = numAvail + 1; } // Tarukaja
+    if (AI_CHK_MYABLESKIL(336) == 1) { numAvail = numAvail + 1; } // Rakukaja
+    if (AI_CHK_MYABLESKIL(337) == 1) { numAvail = numAvail + 1; } // Sukukaja
+    if (AI_CHK_MYABLESKIL(345) == 1) { numAvail = numAvail + 1; } // Tarunda
+    if (AI_CHK_MYABLESKIL(346) == 1) { numAvail = numAvail + 1; } // Rakunda
+    if (AI_CHK_MYABLESKIL(347) == 1) { numAvail = numAvail + 1; } // Sukunda
+    if (AI_CHK_MYABLESKIL(303) == 1) { numAvail = numAvail + 1; } // Brave Step
+
+    if (numAvail == 0)
+    {
+        return;
+    }
+
+    if (numAvail <= 1)
+    {
+        pick = 0;
+    }
+    else
+    {
+        pick = RND(numAvail - 1);
+        if (pick >= numAvail)
+        {
+            pick = numAvail - 1;
+        }
+    }
+
+    // Pass 2: select the `pick`-th eligible skill cleanly
+    idx = 0;
+    chosen = 0;
+    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(292) == 1)) { if (idx == pick) { chosen = 292; } idx = idx + 1; }
+    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(293) == 1)) { if (idx == pick) { chosen = 293; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(348) == 1) { if (idx == pick) { chosen = 348; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(338) == 1) { if (idx == pick) { chosen = 338; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(340) == 1) { if (idx == pick) { chosen = 340; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(341) == 1) { if (idx == pick) { chosen = 341; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(342) == 1) { if (idx == pick) { chosen = 342; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(185) == 1) { if (idx == pick) { chosen = 185; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(188) == 1) { if (idx == pick) { chosen = 188; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(350) == 1) { if (idx == pick) { chosen = 350; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(351) == 1) { if (idx == pick) { chosen = 351; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(352) == 1) { if (idx == pick) { chosen = 352; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(335) == 1) { if (idx == pick) { chosen = 335; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(336) == 1) { if (idx == pick) { chosen = 336; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(337) == 1) { if (idx == pick) { chosen = 337; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(345) == 1) { if (idx == pick) { chosen = 345; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(346) == 1) { if (idx == pick) { chosen = 346; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(347) == 1) { if (idx == pick) { chosen = 347; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(303) == 1) { if (idx == pick) { chosen = 303; } idx = idx + 1; }
+
+    if (chosen > 0)
+    {
+        AI_ACT_SKILL(chosen);
+        // Single-target debuffs refresh the highest-HP enemy (boss); others target party/random
+        if ((chosen == 348) || (chosen == 345) || (chosen == 346) || (chosen == 347))
+        {
+            AI_TAR_HPMAX();
+        }
+        else
+        {
+            AI_TAR_RND();
+        }
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Ailment Skills
+// ============================================================================
+void ACT_Ailment(int forced)
+{
+    int res;
+
+    if (sLockMode == 2)
+    {
+        return;
+    }
+
+    res = AI_ACT_BADSKILL();
+    if (res != -1)
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Probe Unknown Enemy Affinities
+// ============================================================================
+void ACT_UnknownAttr()
+{
+    int res;
+
+    if ((sLockMode == 1) || (sLockMode == 2) || (sNo1MoreFlag == 1) || (sIsUnstable == 1))
+    {
+        return;
+    }
+
+    // Never waste an active Charge (0x0100) or Concentrate (0x0200) on an affinity probe!
+    if (AI_CHK_MYHOJO(0x0300) == 1)
+    {
+        return;
+    }
+
+    res = AI_ACT_UNKNOWN_ATTR(0);
+    if (res != -1)
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Scripted Fixed Actions (Special Boss Encounters)
+// ============================================================================
+void ACT_Fixed()
+{
+    int res;
+
+    if (BIT_CHK(805306368 + 370) == 1)
+    {
+        return;
+    }
+
+    res = AI_ACT_FIXED();
+    if (res != -1)
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Helper: Try Signature 3rd-Semester / High-Impact Physical Skills
+// ============================================================================
+void TrySignaturePhysSkills(int allowAoE)
+{
+    int uid;
+
+    if ((sNotPhysical == 1) || (sLockMode == 1))
+    {
+        return;
+    }
+
+    // Sumire: Masquerade (298) — Severe Phys 2x to 1 foe (25% HP cost -> require > 30% HP!)
+    if ((sMyHpPct > 30) && (AI_CHK_MYABLESKIL(298) == 1))
+    {
+        uid = AI_GET_UNINOMALHPMIN(0);
+        if (uid != -1)
+        {
+            AI_ACT_SKILL(298);
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Akechi: Laevateinn (279) — Colossal Phys to 1 foe (25% HP cost -> require > 30% HP!)
+    if ((sMyHpPct > 30) && (AI_CHK_MYABLESKIL(279) == 1))
+    {
+        uid = AI_GET_UNINOMALHPMIN(0);
+        if (uid != -1)
+        {
+            AI_ACT_SKILL(279);
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Morgana: Miracle Rush (291) — AoE Med Phys high crit
+    if ((allowAoE == 1) && (AI_CHK_MYABLESKIL(291) == 1))
+    {
+        if (IsAoESafeForAttr(0) == 1)
+        {
+            AI_ACT_SKILL(291);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+}
+
+// ============================================================================
+// Action: Best Offensive Skill Selection (Charged/Concentrated/3rd-Sem/HighSkill)
+//   aggressive = 0 (Act Freely: Phys HP > 35%, Magic SP > 15%)
+//   aggressive = 1 (Full Assault: Phys HP > 25%, Magic SP > 0%)
+// ============================================================================
+void ACT_BestOffense(int aggressive)
+{
+    int hpMin;
+    int spMin;
+    int attr;
+    int uid;
+    int singleOnly;
+    int skill;
+    int res;
+    int skipAttr;
+
+    if (aggressive == 1)
+    {
+        hpMin = 25;
+        spMin = 0;
+    }
+    else
+    {
+        hpMin = 35;
+        spMin = 15;
+    }
+
+    // 1. If Charged (0x0100): immediately cash in with strongest Physical skill!
+    if ((AI_CHK_MYHOJO(0x0100) == 1) && (sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > 20))
+    {
+        TrySignaturePhysSkills(1);
+        if (sActionDone != 0) { return; }
+
+        if (IsAoESafeForAttr(0) == 1)
+        {
+            res = AI_ACT_HIGHSKILL(2); // AoE Phys (safe against Phys Repel/Drain/Null & Disaster Shadows)
+            if ((res != -1) && (res != 0))
+            {
+                sActionDone = 10;
+                return;
+            }
+        }
+        res = AI_ACT_HIGHSKILL(4); // Single Phys
+        if ((res != -1) && (res != 0))
+        {
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 2. If Concentrated (0x0200): immediately cash in with strongest Magic/Almighty skill!
+    if ((AI_CHK_MYHOJO(0x0200) == 1) && (sLockMode != 2))
+    {
+        // Akechi Rebellion Blade (297)
+        if (AI_CHK_MYABLESKIL(297) == 1)
+        {
+            AI_ACT_SKILL(297);
+            if (AI_CHK_ENBAD(0x00100000) == 1)
+            {
+                AI_TAR_BAD(0x00100000);
+            }
+            else
+            {
+                AI_TAR_HPMAX();
+            }
+            sActionDone = 10;
+            return;
+        }
+
+        if ((sEnemyCount > 1) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0))
+        {
+            res = AI_ACT_HIGHSKILL(1); // AoE Magic
+            if ((res != -1) && (res != 0))
+            {
+                sActionDone = 10;
+                return;
+            }
+        }
+        res = AI_ACT_HIGHSKILL(3); // Single Magic
+        if ((res != -1) && (res != 0))
+        {
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 3. Exploit known weaknesses even on already-downed enemies (e.g., bosses or Hold-Up followup)
+    attr = 0;
+    while (attr <= 9)
+    {
+        skipAttr = 0;
+        // Both Phys (0) and Gun (1) skills cost HP; sNotPhysical only blocks Phys (0)
+        if (((attr == 0) || (attr == 1)) && ((sLockMode == 1) || (sMyHpPct <= hpMin) || ((attr == 0) && (sNotPhysical == 1))))
+        {
+            skipAttr = 1;
+        }
+        if ((attr >= 2) && ((sLockMode == 2) || (sMySpPct <= spMin)))
+        {
+            skipAttr = 1;
+        }
+
+        if (skipAttr == 0)
+        {
+            uid = AI_GET_UNIWEAK(attr);
+            if (uid != -1)
+            {
+                if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1)
+                {
+                    if (IsAoESafeForAttr(attr) == 1)
+                    {
+                        singleOnly = 0;
+                    }
+                    else
+                    {
+                        singleOnly = 1;
+                    }
+
+                    skill = AI_GET_UNIBESTATTRSKIL(uid, attr, singleOnly);
+                    if (skill > 0)
+                    {
+                        sTargetUid = uid;
+                        sSkillId = skill;
+                        sActionDone = 1;
+                        return;
+                    }
+                }
+            }
+        }
+
+        attr = attr + 1;
+    }
+
+    // 4. 3rd-Semester signature Physical skills (Masquerade / Laevateinn / Miracle Rush)
+    if (sMyHpPct > hpMin)
+    {
+        TrySignaturePhysSkills(1);
+        if (sActionDone != 0) { return; }
+    }
+
+    // 5. High-damage skill dispatch (respecting single-target priority flag, Phys Repel/Drain & Disaster Shadows)
+    if (sSingleOnlyFlag == 1)
+    {
+        if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin))
+        {
+            res = AI_ACT_HIGHSKILL(4); // Single Phys
+            if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+        }
+        if ((sLockMode != 2) && (sMySpPct > spMin))
+        {
+            res = AI_ACT_HIGHSKILL(3); // Single Magic
+            if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+        }
+    }
+
+    if ((sEnemyCount > 1) && (sIsUnstable == 0))
+    {
+        if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin))
+        {
+            if (IsAoESafeForAttr(0) == 1)
+            {
+                res = AI_ACT_HIGHSKILL(2); // AoE Phys
+                if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+            }
+        }
+        if ((sLockMode != 2) && (sMySpPct > spMin))
+        {
+            res = AI_ACT_HIGHSKILL(1); // AoE Magic
+            if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+        }
+    }
+
+    if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin))
+    {
+        res = AI_ACT_HIGHSKILL(4); // Single Phys
+        if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+    }
+
+    if ((sLockMode != 2) && (sMySpPct > spMin))
+    {
+        res = AI_ACT_HIGHSKILL(3); // Single Magic
+        if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+    }
+}
+
+// ============================================================================
+// Action: Zero-SP HP-Cost Physical & Gun Skills (Conserve SP Rewrite!)
+// ============================================================================
+void ACT_PhysZeroSP()
+{
+    int uid;
+    int skill;
+    int singleOnly;
+    int res;
+
+    if ((sLockMode == 1) || (sMyHpPct <= 45))
+    {
+        return;
+    }
+
+    // 1. Standing Gun (1) weakness via HP-cost Gun skill (works even against flying Wakaba!)
+    uid = AI_GET_UNIWEAK_ST(1);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        {
+            if (IsAoESafeForAttr(1) == 1) { singleOnly = 0; } else { singleOnly = 1; }
+            skill = AI_GET_UNIBESTATTRSKIL(uid, 1, singleOnly);
+            if (skill > 0)
+            {
+                sTargetUid = uid;
+                sSkillId = skill;
+                sActionDone = 1;
+                return;
+            }
+        }
+    }
+
+    // Physical skills blocked when enemies are flying (e.g. Cognitive Wakaba)
+    if (sNotPhysical == 1)
+    {
+        return;
+    }
+
+    // 2. Standing Phys (0) weakness via HP-cost Phys skill
+    uid = AI_GET_UNIWEAK_ST(0);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 1)
+        {
+            if (IsAoESafeForAttr(0) == 1) { singleOnly = 0; } else { singleOnly = 1; }
+            skill = AI_GET_UNIBESTATTRSKIL(uid, 0, singleOnly);
+            if (skill > 0)
+            {
+                sTargetUid = uid;
+                sSkillId = skill;
+                sActionDone = 1;
+                return;
+            }
+        }
+    }
+
+    // 3. Signature 3rd-sem Phys skills (Masquerade, Laevateinn, Miracle Rush)
+    TrySignaturePhysSkills(1);
+    if (sActionDone != 0)
+    {
+        return;
+    }
+
+    // 4. AoE Phys on 2+ foes if safe (no Phys Repel/Drain/Null, no Disaster Shadow)
+    if (IsAoESafeForAttr(0) == 1)
+    {
+        res = AI_ACT_HIGHSKILL(2);
+        if ((res != -1) && (res != 0))
+        {
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 5. Single-target Phys skill
+    res = AI_ACT_HIGHSKILL(4);
+    if ((res != -1) && (res != 0))
+    {
+        sActionDone = 10;
+    }
+}
+
+// ============================================================================
+// Action: Safe Fallback — Melee Attack (Avoiding Shock/Immune) or Guard
+// ============================================================================
+void ACT_AttackOrGuard()
+{
+    int myAttr;
+    int uid;
+    int res;
+
+    // Flying / no-physical encounters (e.g. Cognitive Wakaba) or Maruki Phys lockout
+    if ((sNotPhysical == 1) || (sLockMode == 1))
+    {
+        // Try Gun first if allowed
+        if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
+        {
+            uid = AI_GET_UNINOMALHPMIN(1);
+            if (uid != -1)
+            {
+                if (sMyCharId != 7)
+                {
+                    AI_ACT_GUN();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+                else if (IsHaruGunSafe() == 1)
+                {
+                    AI_ACT_GUN();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+
+        // Try non-physical skill unless Conserve SP, Forgotten, or Magic locked
+        if ((sOrder != 2) && (sLockMode != 2) && (AI_CHK_MYBAD(0x40) == 0))
+        {
+            res = AI_ACT_HIGHSKILL(5);
+            if ((res != -1) && (res != 0))
+            {
+                sActionDone = 10;
+                return;
+            }
+        }
+
+        if (sLockMode != 5)
+        {
+            AI_ACT_DEFENSE();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    myAttr = AI_GET_MYATTRATTACK();
+
+    // 1. Standing Phys-weak enemy for free melee 1 More (matches P3R ACT_AttackOrGuard; skips Shocked foes!)
+    if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
+    {
+        uid = AI_GET_UNIWEAK_ST(myAttr);
+        if (uid != -1)
+        {
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+            {
+                AI_ACT_ATTACK();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    // 2. Frozen enemy (0x02) -> free melee Technical shatter if no enemy Null/Repel/Drains Phys (P3R ACT_FrozenEnemy parity!)
+    if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENMUKOU(myAttr) == 0) && (AI_CHK_ENHANSYA(myAttr) == 0) && (AI_CHK_ENKYUSYU(myAttr) == 0))
+    {
+        AI_ACT_ATTACK();
+        AI_TAR_BAD(0x02);
+        sActionDone = 10;
+        return;
+    }
+
+    // 3. Any known Phys-weak enemy (skip Shocked foes!)
+    uid = AI_GET_UNIWEAK(myAttr);
+    if (uid != -1)
+    {
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+        {
+            AI_ACT_ATTACK();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 4. Prefer unanalyzed enemy with melee (probes Phys affinity safely; skip Shocked foes!)
+    uid = AI_GET_UNI_NOANALYZE(myAttr);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIBAD(uid, 4) == 0)
+        {
+            AI_ACT_ATTACK();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 5. Prefer normal-damage enemy that isn't Shocked (bug fix over vanilla!)
+    uid = AI_GET_UNINOMALHPMIN(myAttr);
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIBAD(uid, 4) == 0)
+        {
+            AI_ACT_ATTACK();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 6. Engine general attack target if not Shocked
+    uid = AI_GET_UNI_ATTACK();
+    if (uid != -1)
+    {
+        if (AI_CHK_UNIBAD(uid, 4) == 0)
+        {
+            AI_ACT_ATTACK();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // 4. If all enemies Null/Repel/Drain Phys or are Shocked: try Gun, then non-Phys skill (unless Conserve SP/Forgotten), then Guard!
+    if ((sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
+    {
+        uid = AI_GET_UNINOMALHPMIN(1);
+        if (uid != -1)
+        {
+            if (sMyCharId != 7)
+            {
+                AI_ACT_GUN();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+            else if (IsHaruGunSafe() == 1)
+            {
+                AI_ACT_GUN();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    if ((sOrder != 2) && (sLockMode != 2) && (AI_CHK_MYBAD(0x40) == 0))
+    {
+        res = AI_ACT_HIGHSKILL(5);
+        if ((res != -1) && (res != 0))
+        {
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Safe Guard fallback
+    if (sLockMode != 5)
+    {
+        AI_ACT_DEFENSE();
+        sActionDone = 10;
+        return;
+    }
+
+    // Last-resort attack if Guard itself is locked (Maruki lock mode 5)
+    AI_ACT_ATTACK();
+    AI_TAR_RND();
+    sActionDone = 10;
+}
