@@ -1,5 +1,7 @@
 # Arke Intelligence - Tactics Rewrite (Persona 5 Royal PC)
 
+**Author:** J1gno
+
 A complete overhaul of Persona 5 Royal's party member **Tactics AI**, inspired by Persona 3 Reload's *Arke Intelligence - Tactics Rewrite* and rebuilt from the ground up for P5R PC.
 
 If you like playing with Tactics (*Act Freely*, *Full Assault*, *Conserve SP*, *Heal/Support*)—or just want your teammates to stop making frustrating vanilla AI mistakes—this mod makes your party fight smart, use their full skill kits, and respect P5R's mechanics.
