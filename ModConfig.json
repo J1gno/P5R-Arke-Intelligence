@@ -1,7 +1,7 @@
 {
   "ModId": "p5rpc.gameplay.arkeintelligence",
   "ModName": "Arke Intelligence - Tactics Rewrite (P5R)",
-  "ModAuthor": "Arke Intelligence P5R Adaptation",
+  "ModAuthor": "J1gno",
   "ModVersion": "1.0.0",
   "ModDescription": "Overhauls Persona 5 Royal's party member Tactics AI (Act Freely, Full Assault, Conserve SP, Heal/Support) so teammates fight smarter, use their full skill kits (including Baton Pass, Technicals, Showtimes, and accessory skills), and avoid vanilla AI mistakes.",
   "ModDll": "",
