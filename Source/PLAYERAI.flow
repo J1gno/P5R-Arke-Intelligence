@@ -699,8 +699,8 @@ void ACT_EndBattle_ATK()
         }
         if (uid != -1)
         {
-            // Never melee a Shocked enemy (0x04) to avoid self-shock
-            if (AI_CHK_UNIBAD(uid, 4) == 0)
+            // Never melee a Shocked (0x04) or Tetrakarn-shielded (0x4000) enemy!
+            if ((AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 if (AI_CHK_UNIATTACK(uid) == 1)
                 {
@@ -2163,9 +2163,8 @@ void ACT_Technical()
         return;
     }
 
-    // Never let engine AI_ACT_TECHNICAL() preempt a 2.5x Charged/Concentrated ACT_BestOffense() nuke
-    // (on Sleep/Dizzy foes, ACT_BestOffense()'s strongest nuke will still trigger Technical!)
-    if (AI_CHK_MYHOJO(0x0300) == 1)
+    // Never let engine AI_ACT_TECHNICAL() preempt a 2.5x Charged/Concentrated nuke or fire into enemy Karns (0xC000)!
+    if ((AI_CHK_MYHOJO(0x0300) == 1) || (AI_CHK_ENHOJO(0xC000) == 1))
     {
         return;
     }
@@ -2198,11 +2197,11 @@ void ACT_KillEnemy_Gun()
         }
     }
 
-    // Bug fix over vanilla: prefer low-HP Gun-weak target first, then normal low-HP target
+    // Bug fix over vanilla: prefer low-HP Gun-weak target first, then normal low-HP target (skip Tetrakarn 0x4000!)
     uid = AI_GET_UNIWEAKHPMIN(1);
     if (uid != -1)
     {
-        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHP(uid, 35) == 1))
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHP(uid, 35) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
         {
             AI_ACT_GUN();
             AI_TAR_UID(uid);
@@ -2214,7 +2213,7 @@ void ACT_KillEnemy_Gun()
     uid = AI_GET_UNINOMALHPMIN(1);
     if (uid != -1)
     {
-        if (AI_CHK_UNIHP(uid, 25) == 1)
+        if ((AI_CHK_UNIHP(uid, 25) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
         {
             AI_ACT_GUN();
             AI_TAR_UID(uid);
@@ -2241,11 +2240,11 @@ void ACT_GunWeakOrKill()
         }
     }
 
-    // 1. Standing Gun-weak enemy for 1 More
+    // 1. Standing Gun-weak enemy for 1 More (skip Tetrakarn 0x4000!)
     uid = AI_GET_UNIWEAK_ST(1);
     if (uid != -1)
     {
-        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
         {
             AI_ACT_GUN();
             AI_TAR_UID(uid);
@@ -2277,11 +2276,11 @@ void ACT_GunSmart()
     }
 
     // Bug fix over vanilla: do NOT globally abort Gun just because a *different* enemy resists Gun!
-    // Check standing Gun-weak -> any Gun-weak -> normal-damage single target -> unanalyzed target.
+    // Check standing Gun-weak -> any Gun-weak -> Frozen -> normal-damage single target -> unanalyzed target (skip Tetrakarn 0x4000!).
     uid = AI_GET_UNIWEAK_ST(1);
     if (uid != -1)
     {
-        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
         {
             AI_ACT_GUN();
             AI_TAR_UID(uid);
@@ -2293,7 +2292,7 @@ void ACT_GunSmart()
     uid = AI_GET_UNIWEAK(1);
     if (uid != -1)
     {
-        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
         {
             AI_ACT_GUN();
             AI_TAR_UID(uid);
@@ -2308,9 +2307,8 @@ void ACT_GunSmart()
         return;
     }
 
-    // Frozen enemy (0x02) -> free ranged Gun Technical shatter!
-    // (In P5R, Freeze temporarily removes the Frozen target's Gun Null/Repel/Drain; AoE guns were already checked above!)
-    if (AI_CHK_ENBAD(0x02) == 1)
+    // Frozen enemy (0x02) -> free ranged Gun Technical shatter (skip if enemy Tetrakarn 0x4000 is active!)
+    if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENHOJO(0x4000) == 0))
     {
         AI_ACT_GUN();
         AI_TAR_BAD(0x02);
@@ -2321,19 +2319,25 @@ void ACT_GunSmart()
     uid = AI_GET_UNINOMALHPMIN(1);
     if (uid != -1)
     {
-        AI_ACT_GUN();
-        AI_TAR_UID(uid);
-        sActionDone = 10;
-        return;
+        if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+        {
+            AI_ACT_GUN();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
     }
 
     uid = AI_GET_UNI_NOANALYZE(1);
     if (uid != -1)
     {
-        AI_ACT_GUN();
-        AI_TAR_UID(uid);
-        sActionDone = 10;
-        return;
+        if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+        {
+            AI_ACT_GUN();
+            AI_TAR_UID(uid);
+            sActionDone = 10;
+            return;
+        }
     }
 }
 
@@ -3223,8 +3227,8 @@ void ACT_UnknownAttr()
         return;
     }
 
-    // Never waste an active Charge (0x0100) or Concentrate (0x0200) on an affinity probe!
-    if (AI_CHK_MYHOJO(0x0300) == 1)
+    // Never waste an active Charge/Concentrate (0x0300) on a probe or probe into active enemy Karns (0xC000)!
+    if ((AI_CHK_MYHOJO(0x0300) == 1) || (AI_CHK_ENHOJO(0xC000) == 1))
     {
         return;
     }
@@ -3903,19 +3907,22 @@ void ACT_AttackOrGuard()
             }
             if (uid != -1)
             {
-                if ((sMyCharId != 4) && (sMyCharId != 7))
+                if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
                 {
-                    AI_ACT_GUN();
-                    AI_TAR_UID(uid);
-                    sActionDone = 10;
-                    return;
-                }
-                else if (IsAoEGunSafe() == 1)
-                {
-                    AI_ACT_GUN();
-                    AI_TAR_UID(uid);
-                    sActionDone = 10;
-                    return;
+                    if ((sMyCharId != 4) && (sMyCharId != 7))
+                    {
+                        AI_ACT_GUN();
+                        AI_TAR_UID(uid);
+                        sActionDone = 10;
+                        return;
+                    }
+                    else if (IsAoEGunSafe() == 1)
+                    {
+                        AI_ACT_GUN();
+                        AI_TAR_UID(uid);
+                        sActionDone = 10;
+                        return;
+                    }
                 }
             }
         }
@@ -3941,16 +3948,17 @@ void ACT_AttackOrGuard()
 
     myAttr = AI_GET_MYATTRATTACK();
 
-    // If Charged (0x0100) and too low HP for Phys skills, skip basic melee (Step 7 tries Gun -> Magic -> Guard to preserve Charge!)
-    if ((AI_CHK_MYHOJO(0x0100) == 0) || (sMyHpPct > 35))
+    // If Charged (0x0100) reached fallback (low HP, Tetrakarn, Phys-immune, or Forgotten), skip basic melee
+    // and jump to Step 7 (Gun -> non-Phys skill -> Guard) so 2.5x Charge is never wasted or reflected!
+    if (AI_CHK_MYHOJO(0x0100) == 0)
     {
-        // 1. Standing Phys-weak enemy for free melee 1 More (matches P3R ACT_AttackOrGuard; skips Shocked foes!)
+        // 1. Standing Phys-weak enemy for free melee 1 More (skip Shocked 0x04 & Tetrakarn 0x4000!)
         if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
         {
             uid = AI_GET_UNIWEAK_ST(myAttr);
             if (uid != -1)
             {
-                if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+                if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
                 {
                     AI_ACT_ATTACK();
                     AI_TAR_UID(uid);
@@ -3960,9 +3968,8 @@ void ACT_AttackOrGuard()
             }
         }
 
-        // 2. Frozen enemy (0x02) -> free single-target melee Technical shatter!
-        // (In P5R, Freeze temporarily removes the Frozen target's Phys Null/Repel/Drain!)
-        if (AI_CHK_ENBAD(0x02) == 1)
+        // 2. Frozen enemy (0x02) -> free single-target melee Technical shatter (skip if Tetrakarn 0x4000 is active!)
+        if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENHOJO(0x4000) == 0))
         {
             AI_ACT_ATTACK();
             AI_TAR_BAD(0x02);
@@ -3970,11 +3977,11 @@ void ACT_AttackOrGuard()
             return;
         }
 
-        // 3. Any known Phys-weak enemy (skip Shocked foes!)
+        // 3. Any known Phys-weak enemy (skip Shocked & Tetrakarn!)
         uid = AI_GET_UNIWEAK(myAttr);
         if (uid != -1)
         {
-            if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 AI_ACT_ATTACK();
                 AI_TAR_UID(uid);
@@ -3983,11 +3990,11 @@ void ACT_AttackOrGuard()
             }
         }
 
-        // 4. Prefer unanalyzed enemy with melee (probes Phys affinity safely; skip Shocked foes!)
+        // 4. Prefer unanalyzed enemy with melee (probes Phys affinity safely; skip Shocked & Tetrakarn!)
         uid = AI_GET_UNI_NOANALYZE(myAttr);
         if (uid != -1)
         {
-            if (AI_CHK_UNIBAD(uid, 4) == 0)
+            if ((AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 AI_ACT_ATTACK();
                 AI_TAR_UID(uid);
@@ -3996,11 +4003,11 @@ void ACT_AttackOrGuard()
             }
         }
 
-        // 5. Prefer normal-damage enemy that isn't Shocked (bug fix over vanilla!)
+        // 5. Prefer normal-damage enemy that isn't Shocked or Tetrakarn-shielded
         uid = AI_GET_UNINOMALHPMIN(myAttr);
         if (uid != -1)
         {
-            if (AI_CHK_UNIBAD(uid, 4) == 0)
+            if ((AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 AI_ACT_ATTACK();
                 AI_TAR_UID(uid);
@@ -4009,7 +4016,7 @@ void ACT_AttackOrGuard()
             }
         }
 
-        // 6. Engine general attack target if not Shocked
+        // 6. Engine general attack target if not Shocked (still allows an un-Charged tap to clear Tetrakarn as last resort)
         uid = AI_GET_UNI_ATTACK();
         if (uid != -1)
         {
@@ -4023,7 +4030,7 @@ void ACT_AttackOrGuard()
         }
     }
 
-    // 7. If all enemies Null/Repel/Drain Phys or are Shocked: try Gun, then non-Phys skill (unless Conserve SP/Forgotten), then Guard!
+    // 7. If all enemies Null/Repel/Drain Phys, are Shocked, or ally is preserving Charge: try Gun (skip Tetrakarn!), non-Phys skill, then Guard!
     if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
     {
         uid = AI_GET_UNIWEAK(1);
@@ -4040,19 +4047,22 @@ void ACT_AttackOrGuard()
         }
         if (uid != -1)
         {
-            if ((sMyCharId != 4) && (sMyCharId != 7))
+            if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
             {
-                AI_ACT_GUN();
-                AI_TAR_UID(uid);
-                sActionDone = 10;
-                return;
-            }
-            else if (IsAoEGunSafe() == 1)
-            {
-                AI_ACT_GUN();
-                AI_TAR_UID(uid);
-                sActionDone = 10;
-                return;
+                if ((sMyCharId != 4) && (sMyCharId != 7))
+                {
+                    AI_ACT_GUN();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+                else if (IsAoEGunSafe() == 1)
+                {
+                    AI_ACT_GUN();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
             }
         }
     }
