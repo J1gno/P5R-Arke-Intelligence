@@ -1,0 +1,52 @@
+{
+  "ModId": "p5rpc.gameplay.arkeintelligence",
+  "ModName": "Arke Intelligence - Tactics Rewrite (P5R)",
+  "ModAuthor": "Arke Intelligence P5R Adaptation",
+  "ModVersion": "1.0.0",
+  "ModDescription": "Overhauls Persona 5 Royal's party member Tactics AI (Act Freely, Full Assault, Conserve SP, Heal/Support) so teammates fight smarter, use their full skill kits—including Baton Pass, Technicals, Showtimes, 3rd Semester & Will Seed Ring skills—and avoid vanilla AI mistakes.",
+  "ModDll": "",
+  "ModIcon": "",
+  "ModR2RManagedDll32": "",
+  "ModR2RManagedDll64": "",
+  "ModNativeDll32": "",
+  "ModNativeDll64": "",
+  "Tags": [
+    "Gameplay",
+    "Battle",
+    "AI",
+    "Tactics"
+  ],
+  "CanUnload": null,
+  "HasExports": null,
+  "IsLibrary": false,
+  "ReleaseMetadataFileName": "p5rpc.gameplay.arkeintelligence.ReleaseMetadata.json",
+  "IgnoreRegexes": [
+    "^Source/.*",
+    "^README\\.md$"
+  ],
+  "IncludeRegexes": [],
+  "PluginData": {
+    "GitHubDependencies": {
+      "IdToConfigMap": {
+        "p5rpc.modloader": {
+          "Config": {
+            "UserName": "Sewer56",
+            "RepositoryName": "p5rpc.modloader",
+            "UseReleaseTag": true,
+            "AssetFileName": "Mod.zip"
+          },
+          "ReleaseMetadataName": "p5rpc.modloader.ReleaseMetadata.json"
+        }
+      }
+    }
+  },
+  "IsUniversalMod": false,
+  "ModDependencies": [
+    "p5rpc.modloader"
+  ],
+  "OptionalDependencies": [],
+  "SupportedAppId": [
+    "p5r.exe"
+  ],
+  "ProjectUrl": "https://github.com/J1gno/P5R-Arke-Intelligence"
+}
