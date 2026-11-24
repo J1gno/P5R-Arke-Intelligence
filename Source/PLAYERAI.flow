@@ -262,7 +262,7 @@ int IsHaruGunSafe()
     {
         return 0;
     }
-    if (sSingleOnlyFlag == 1)
+    if ((sEnemyCount > 1) && (sSingleOnlyFlag == 1))
     {
         return 0;
     }
@@ -281,13 +281,19 @@ int IsHaruGunSafe()
     return 1;
 }
 
-// Returns 1 if any enemy resists, nulls, repels, or absorbs `attr`
-int IsAttrImpeded(int attr)
+// Returns 1 if any enemy is KNOWN (analyzed) to resist, null, repel, or absorb `attr`
+// Avoids affinity-peeking cheats on unanalyzed bosses before the player discovers resistances!
+int IsAttrKnownImpeded(int attr)
 {
-    if (AI_CHK_ENRESIST(attr) == 1) { return 1; }
-    if (AI_CHK_ENMUKOU(attr) == 1)  { return 1; }
-    if (AI_CHK_ENHANSYA(attr) == 1) { return 1; }
-    if (AI_CHK_ENKYUSYU(attr) == 1) { return 1; }
+    int uid;
+    uid = AI_GET_UNIRESIST(attr);
+    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
+    uid = AI_GET_UNIMUKOU(attr);
+    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
+    uid = AI_GET_UNIHANSYA(attr);
+    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
+    uid = AI_GET_UNIKYUSYU(attr);
+    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
     return 0;
 }
 
@@ -565,11 +571,11 @@ void AI_pattern_SaveSP()
 // ============================================================================
 void AI_pattern_SaveHP()
 {
-    ACT_ChargeGuard();
+    // Finish lone low-HP foe with free melee before guarding or spending SP on buffs/heals
+    ACT_EndBattle_ATK();
     if (sActionDone != 0) { return; }
 
-    // Finish lone low-HP foe with free melee before spending SP on buffs/heals
-    ACT_EndBattle_ATK();
+    ACT_ChargeGuard();
     if (sActionDone != 0) { return; }
 
     ACT_Rez();
@@ -635,7 +641,11 @@ void ACT_EndBattle_ATK()
     if (sEnemyCount == 1)
     {
         myAttr = AI_GET_MYATTRATTACK();
-        uid = AI_GET_UNINOMALHPMIN(myAttr);
+        uid = AI_GET_UNIWEAKHPMIN(myAttr);
+        if (uid == -1)
+        {
+            uid = AI_GET_UNINOMALHPMIN(myAttr);
+        }
         if (uid != -1)
         {
             // Never melee a Shocked enemy (0x04) to avoid self-shock
@@ -904,7 +914,7 @@ void ACT_Heal(int proactive)
         return;
     }
 
-    // O(1) check if party has any curable ailment (gives Salvation priority over Mediarahan)
+    // O(1) check if party has any curable ailment (prioritize 48-SP Salvation only when urgent/boss/severe)
     hasAilment = AI_CHK_FRBAD(0x0FFF);
 
     // 1. Multiple hurt allies -> prefer AoE heal
@@ -912,10 +922,13 @@ void ACT_Heal(int proactive)
     {
         if ((hasAilment == 1) && (sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
         {
-            AI_ACT_SKILL(318); // Salvation
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((critCount >= 1) || (sIsBoss == 1) || (AI_CHK_FRBAD(0x0F3E) == 1))
+            {
+                AI_ACT_SKILL(318); // Salvation
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
         if ((critCount >= 1) && (AI_CHK_MYABLESKIL(307) == 1))
         {
@@ -1074,6 +1087,10 @@ void ACT_Heal(int proactive)
 void ACT_EmergencyRezAndHeal()
 {
     int id;
+    int uid;
+    int maxHp;
+    int hpPct;
+    int bestPct;
     int critChar;
     int critCount;
 
@@ -1089,17 +1106,32 @@ void ACT_EmergencyRezAndHeal()
         return;
     }
 
+    // Scan 10 -> 1 tracking exact lowest HP% (<= so Joker wins ties, and 5% ally beats 29% ally!)
     critChar = 0;
+    bestPct = 101;
     critCount = 0;
     id = 10;
     while (id >= 1)
     {
         if (IsAllyAlive(id) == 1)
         {
-            if (AI_CHK_FRIDHP(id, 30) == 1)
+            uid = AI_GET_UNI(0, id);
+            if (uid != -1)
             {
-                critCount = critCount + 1;
-                critChar = id; // Joker (1) checked last -> priority
+                maxHp = AI_GET_P_MAX_HP(uid);
+                if (maxHp > 0)
+                {
+                    hpPct = (100 * AI_GET_P_NOW_HP(uid)) / maxHp;
+                    if (hpPct <= 30)
+                    {
+                        critCount = critCount + 1;
+                        if (hpPct <= bestPct)
+                        {
+                            bestPct = hpPct;
+                            critChar = id;
+                        }
+                    }
+                }
             }
         }
         id = id - 1;
@@ -1438,11 +1470,14 @@ void ACT_CureAilment()
         }
     }
 
-    // Engine fallback
-    res = AI_ACT_BADSTATE();
-    if (res != -1)
+    // Engine fallback (skip if Maruki Mode 3 locks Wings of Wisdom, or if we intentionally skipped 48-SP Salvation!)
+    if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(318) == 0))
     {
-        sActionDone = 10;
+        res = AI_ACT_BADSTATE();
+        if (res != -1)
+        {
+            sActionDone = 10;
+        }
     }
 }
 
@@ -1700,6 +1735,7 @@ void ACT_Takeover()
     }
 
     // Priority 1: Pass to a skill-capable ally who can knock down a standing enemy
+    // Prefer attacking allies (Act Freely / Full Assault) & Joker first, then Heal/Support; skip Conserve SP AI allies!
     id = 2;
     while (id <= 10)
     {
@@ -1709,9 +1745,16 @@ void ACT_Takeover()
             {
                 if ((AI_CHK_TAKEOVER(id) == 1) && (AI_CHK_ABLEWEAK(id) == 1))
                 {
-                    AI_ACT_TAKEOVER(id);
-                    sActionDone = 10;
-                    return;
+                    targetUid = AI_GET_UNI(0, id);
+                    if (targetUid != -1)
+                    {
+                        if (AI_GET_P_ORDER(targetUid) <= 1)
+                        {
+                            AI_ACT_TAKEOVER(id);
+                            sActionDone = 10;
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -1725,6 +1768,30 @@ void ACT_Takeover()
             sActionDone = 10;
             return;
         }
+    }
+    id = 2;
+    while (id <= 10)
+    {
+        if (id != 8)
+        {
+            if (IsAllySkillCapable(id) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(id) == 1) && (AI_CHK_ABLEWEAK(id) == 1))
+                {
+                    targetUid = AI_GET_UNI(0, id);
+                    if (targetUid != -1)
+                    {
+                        if (AI_GET_P_ORDER(targetUid) == 3)
+                        {
+                            AI_ACT_TAKEOVER(id);
+                            sActionDone = 10;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        id = id + 1;
     }
 
     // Priority 2: Pass to a skill-capable ally who can trigger a Technical attack!
@@ -1767,7 +1834,7 @@ void ACT_Takeover()
     }
 
     // Priority 3: If an ally is critically low (<= 40% HP) and healing isn't locked, pass to a healer
-    // (Skip healers set to Full Assault since they won't heal!)
+    // (Skip AI healers set to Full Assault (1) or Conserve SP (2) since they won't heal at 31-40% HP!)
     if (sLockMode != 4)
     {
         critLow = 0;
@@ -1792,7 +1859,8 @@ void ACT_Takeover()
                     targetUid = AI_GET_UNI(0, 3);
                     if (targetUid != -1)
                     {
-                        if (AI_GET_P_ORDER(targetUid) != 1)
+                        targetOrder = AI_GET_P_ORDER(targetUid);
+                        if ((targetOrder == 0) || (targetOrder == 3))
                         {
                             AI_ACT_TAKEOVER(3);
                             sActionDone = 10;
@@ -1808,7 +1876,8 @@ void ACT_Takeover()
                     targetUid = AI_GET_UNI(0, 6);
                     if (targetUid != -1)
                     {
-                        if (AI_GET_P_ORDER(targetUid) != 1)
+                        targetOrder = AI_GET_P_ORDER(targetUid);
+                        if ((targetOrder == 0) || (targetOrder == 3))
                         {
                             AI_ACT_TAKEOVER(6);
                             sActionDone = 10;
@@ -1824,9 +1893,27 @@ void ACT_Takeover()
                     targetUid = AI_GET_UNI(0, 4);
                     if (targetUid != -1)
                     {
-                        if (AI_GET_P_ORDER(targetUid) != 1)
+                        targetOrder = AI_GET_P_ORDER(targetUid);
+                        if ((targetOrder == 0) || (targetOrder == 3))
                         {
                             AI_ACT_TAKEOVER(4);
+                            sActionDone = 10;
+                            return;
+                        }
+                    }
+                }
+            }
+            if (IsAllySkillCapable(10) == 1)
+            {
+                if ((AI_CHK_TAKEOVER(10) == 1) && (AI_CHK_FRIDHREC(10) == 1))
+                {
+                    targetUid = AI_GET_UNI(0, 10);
+                    if (targetUid != -1)
+                    {
+                        targetOrder = AI_GET_P_ORDER(targetUid);
+                        if ((targetOrder == 0) || (targetOrder == 3))
+                        {
+                            AI_ACT_TAKEOVER(10);
                             sActionDone = 10;
                             return;
                         }
@@ -2068,7 +2155,25 @@ void ACT_GunSmart()
         return;
     }
 
+    // Frozen enemy (0x02) -> free ranged Gun Technical shatter if no enemy Null/Repel/Drains Gun!
+    if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENMUKOU(1) == 0) && (AI_CHK_ENHANSYA(1) == 0) && (AI_CHK_ENKYUSYU(1) == 0))
+    {
+        AI_ACT_GUN();
+        AI_TAR_BAD(0x02);
+        sActionDone = 10;
+        return;
+    }
+
     uid = AI_GET_UNINOMALHPMIN(1);
+    if (uid != -1)
+    {
+        AI_ACT_GUN();
+        AI_TAR_UID(uid);
+        sActionDone = 10;
+        return;
+    }
+
+    uid = AI_GET_UNI_NOANALYZE(1);
     if (uid != -1)
     {
         AI_ACT_GUN();
@@ -2225,12 +2330,7 @@ void ACT_Support(int guaranteed)
         return;
     }
 
-    // 1. Urgent dispels (Dekaja / Dekunda)
-    ACT_UrgentDispel();
-    if (sActionDone != 0)
-    {
-        return;
-    }
+    // (ACT_UrgentDispel already runs before ACT_Support in both Act Freely and Heal/Support!)
 
     // 2. Party-wide All-Stat Debuff: Checkmate (292, 90 SP, Makoto 3rd sem) — boss-only & requires >= 2 missing debuffs (or multi-foe boss)
     if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(292) == 1))
@@ -2659,14 +2759,14 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // 10. Elemental Breaks when enemies resist/null/repel/absorb that element
+    // 10. Elemental Breaks when enemies are KNOWN to resist/null/repel/absorb that element
     // Verified directly from SKILL.TBL: Fire=0x01, Ice=0x02, Wind(387)=0x04, Elec(388)=0x08, Nuke(395)=0x10, Psy(396)=0x20 (<< 16)
-    // Only cast on bosses or healthy solo targets so turns aren't wasted on dying trash mobs!
+    // Only cast on bosses or healthy solo targets, and only after affinity is analyzed (no Turn-1 cheating!)
     if ((sIsBoss == 1) || ((sEnemyCount == 1) && (AI_CHK_ENALLHP(50) == 0)))
     {
         if (AI_CHK_MYABLESKIL(385) == 1)
         {
-            if ((AI_CHK_NOTENHOJO(0x00010000) == 1) && (IsAttrImpeded(2) == 1))
+            if ((AI_CHK_NOTENHOJO(0x00010000) == 1) && (IsAttrKnownImpeded(2) == 1))
             {
                 AI_ACT_SKILL(385); // Fire Break
                 AI_TAR_RND();
@@ -2676,7 +2776,7 @@ void ACT_Support(int guaranteed)
         }
         if (AI_CHK_MYABLESKIL(386) == 1)
         {
-            if ((AI_CHK_NOTENHOJO(0x00020000) == 1) && (IsAttrImpeded(3) == 1))
+            if ((AI_CHK_NOTENHOJO(0x00020000) == 1) && (IsAttrKnownImpeded(3) == 1))
             {
                 AI_ACT_SKILL(386); // Ice Break
                 AI_TAR_RND();
@@ -2686,7 +2786,7 @@ void ACT_Support(int guaranteed)
         }
         if (AI_CHK_MYABLESKIL(388) == 1)
         {
-            if ((AI_CHK_NOTENHOJO(0x00080000) == 1) && (IsAttrImpeded(4) == 1))
+            if ((AI_CHK_NOTENHOJO(0x00080000) == 1) && (IsAttrKnownImpeded(4) == 1))
             {
                 AI_ACT_SKILL(388); // Elec Break (SKILL.TBL bit 0x00080000!)
                 AI_TAR_RND();
@@ -2696,7 +2796,7 @@ void ACT_Support(int guaranteed)
         }
         if (AI_CHK_MYABLESKIL(387) == 1)
         {
-            if ((AI_CHK_NOTENHOJO(0x00040000) == 1) && (IsAttrImpeded(5) == 1))
+            if ((AI_CHK_NOTENHOJO(0x00040000) == 1) && (IsAttrKnownImpeded(5) == 1))
             {
                 AI_ACT_SKILL(387); // Wind Break (SKILL.TBL bit 0x00040000!)
                 AI_TAR_RND();
@@ -2706,7 +2806,7 @@ void ACT_Support(int guaranteed)
         }
         if (AI_CHK_MYABLESKIL(396) == 1)
         {
-            if ((AI_CHK_NOTENHOJO(0x00200000) == 1) && (IsAttrImpeded(6) == 1))
+            if ((AI_CHK_NOTENHOJO(0x00200000) == 1) && (IsAttrKnownImpeded(6) == 1))
             {
                 AI_ACT_SKILL(396); // Psy Break
                 AI_TAR_RND();
@@ -2716,7 +2816,7 @@ void ACT_Support(int guaranteed)
         }
         if (AI_CHK_MYABLESKIL(395) == 1)
         {
-            if ((AI_CHK_NOTENHOJO(0x00100000) == 1) && (IsAttrImpeded(7) == 1))
+            if ((AI_CHK_NOTENHOJO(0x00100000) == 1) && (IsAttrKnownImpeded(7) == 1))
             {
                 AI_ACT_SKILL(395); // Nuke Break
                 AI_TAR_RND();
@@ -2824,15 +2924,15 @@ void ACT_SupportRefresh()
         }
     }
 
-    // Pass 1: count usable refreshable buff/debuff skills (excludes 90-SP Checkmate/Hyakka Ryouran!)
+    // Pass 1: count usable refreshable buff/debuff skills (excludes 90-SP Checkmate/Hyakka Ryouran; deduplicates 20-SP Ring vs 24-SP Ma-kaja!)
     numAvail = 0;
     if (AI_CHK_MYABLESKIL(348) == 1) { numAvail = numAvail + 1; } // Debilitate
     if (AI_CHK_MYABLESKIL(338) == 1) { numAvail = numAvail + 1; } // Heat Riser
     if (AI_CHK_MYABLESKIL(340) == 1) { numAvail = numAvail + 1; } // Matarukaja
-    if (AI_CHK_MYABLESKIL(185) == 1) { numAvail = numAvail + 1; } // Vault Guardian
-    if (AI_CHK_MYABLESKIL(341) == 1) { numAvail = numAvail + 1; } // Marakukaja
-    if (AI_CHK_MYABLESKIL(188) == 1) { numAvail = numAvail + 1; } // Gambler's Foresight
-    if (AI_CHK_MYABLESKIL(342) == 1) { numAvail = numAvail + 1; } // Masukukaja
+    if (AI_CHK_MYABLESKIL(185) == 1) { numAvail = numAvail + 1; } // Vault Guardian (20 SP)
+    else if (AI_CHK_MYABLESKIL(341) == 1) { numAvail = numAvail + 1; } // Marakukaja (24 SP)
+    if (AI_CHK_MYABLESKIL(188) == 1) { numAvail = numAvail + 1; } // Gambler's Foresight (20 SP)
+    else if (AI_CHK_MYABLESKIL(342) == 1) { numAvail = numAvail + 1; } // Masukukaja (24 SP)
     if (AI_CHK_MYABLESKIL(350) == 1) { numAvail = numAvail + 1; } // Matarunda
     if (AI_CHK_MYABLESKIL(351) == 1) { numAvail = numAvail + 1; } // Marakunda
     if (AI_CHK_MYABLESKIL(352) == 1) { numAvail = numAvail + 1; } // Masukunda
@@ -2862,16 +2962,16 @@ void ACT_SupportRefresh()
         }
     }
 
-    // Pass 2: select the `pick`-th eligible skill cleanly
+    // Pass 2: select the `pick`-th eligible skill cleanly (must mirror Pass 1 exactly!)
     idx = 0;
     chosen = 0;
     if (AI_CHK_MYABLESKIL(348) == 1) { if (idx == pick) { chosen = 348; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(338) == 1) { if (idx == pick) { chosen = 338; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(340) == 1) { if (idx == pick) { chosen = 340; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(185) == 1) { if (idx == pick) { chosen = 185; } idx = idx + 1; }
-    if (AI_CHK_MYABLESKIL(341) == 1) { if (idx == pick) { chosen = 341; } idx = idx + 1; }
+    else if (AI_CHK_MYABLESKIL(341) == 1) { if (idx == pick) { chosen = 341; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(188) == 1) { if (idx == pick) { chosen = 188; } idx = idx + 1; }
-    if (AI_CHK_MYABLESKIL(342) == 1) { if (idx == pick) { chosen = 342; } idx = idx + 1; }
+    else if (AI_CHK_MYABLESKIL(342) == 1) { if (idx == pick) { chosen = 342; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(350) == 1) { if (idx == pick) { chosen = 350; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(351) == 1) { if (idx == pick) { chosen = 351; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(352) == 1) { if (idx == pick) { chosen = 352; } idx = idx + 1; }
@@ -3057,12 +3157,125 @@ void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
         }
     }
 
-    // Morgana: Miracle Rush (291) — AoE Med Phys high crit (16% HP cost -> require > 25% HP!)
-    if ((allowAoE == 1) && (sMyHpPct > 25) && (AI_CHK_MYABLESKIL(291) == 1))
+    // Morgana: Miracle Rush (291) — AoE Med Phys high crit (16% HP cost -> require > 40% HP!)
+    // Use when Charged, under Conserve SP, or crit-fishing on standing non-boss foes without Phys resist/immunity
+    if ((allowAoE == 1) && (sMyHpPct > 40) && (AI_CHK_MYABLESKIL(291) == 1))
     {
-        if ((IsAoESafeForAttr(0) == 1) || ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1)))
+        if ((AI_CHK_MYHOJO(0x0100) == 1) || (sOrder == 2) || ((sIsBoss == 0) && (sDownCount < sEnemyCount) && (AI_CHK_ENRESIST(0) == 0)))
         {
-            AI_ACT_SKILL(291);
+            if ((IsAoESafeForAttr(0) == 1) || ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1) && (AI_CHK_ENRESIST(0) == 0)))
+            {
+                AI_ACT_SKILL(291);
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Helper: Try HP-Cost Gun Skills (Riot Gun / One-shot Kill / Triple Down / Double Shot / Snap)
+// Works even against flying Cognitive Wakaba (sNotPhysical == 1), Phys-immune foes, and with Charge!
+// ============================================================================
+void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
+{
+    int uid;
+    int gunAoESafe;
+    int gunSingleSafe;
+
+    if ((sLockMode == 1) || (sMyHpPct <= hpMin))
+    {
+        return;
+    }
+
+    gunAoESafe = IsAoESafeForAttr(1);
+    gunSingleSafe = 0;
+    if ((AI_CHK_ENMUKOU(1) == 0) && (AI_CHK_ENHANSYA(1) == 0) && (AI_CHK_ENKYUSYU(1) == 0))
+    {
+        gunSingleSafe = 1;
+    }
+
+    // AoE Gun on 2+ foes: Riot Gun (227, 24% HP) > Triple Down (225, 16% HP)
+    if (gunAoESafe == 1)
+    {
+        if ((sMyHpPct > heavyHpMin) && (AI_CHK_MYABLESKIL(227) == 1))
+        {
+            AI_ACT_SKILL(227); // Riot Gun
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(225) == 1)
+        {
+            AI_ACT_SKILL(225); // Triple Down
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Single-target Gun: One-shot Kill (226, 17% HP) > Double Shot (228, 12% HP) > Snap (224, 9% HP)
+    if ((AI_CHK_MYABLESKIL(226) == 1) || (AI_CHK_MYABLESKIL(228) == 1) || (AI_CHK_MYABLESKIL(224) == 1))
+    {
+        uid = AI_GET_UNIWEAK(1);
+        if (uid != -1)
+        {
+            if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 0)
+            {
+                uid = -1;
+            }
+        }
+        if (uid == -1)
+        {
+            if (preferHighHp == 1)
+            {
+                uid = AI_GET_UNINOMALLVMAXHPMAX(1);
+            }
+            if (uid == -1)
+            {
+                uid = AI_GET_UNINOMALHPMIN(1);
+            }
+        }
+        if (uid != -1)
+        {
+            if (AI_CHK_MYABLESKIL(226) == 1)
+            {
+                AI_ACT_SKILL(226); // One-shot Kill
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(228) == 1)
+            {
+                AI_ACT_SKILL(228); // Double Shot
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(224) == 1)
+            {
+                AI_ACT_SKILL(224); // Snap
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    // Single-enemy AoE Gun fallback (e.g. Riot Gun / Triple Down-only Haru on a 1-enemy boss like Wakaba!)
+    if ((sEnemyCount == 1) && (gunSingleSafe == 1))
+    {
+        if ((sMyHpPct > heavyHpMin) && (AI_CHK_MYABLESKIL(227) == 1))
+        {
+            AI_ACT_SKILL(227); // Riot Gun
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+        if (AI_CHK_MYABLESKIL(225) == 1)
+        {
+            AI_ACT_SKILL(225); // Triple Down
             AI_TAR_RND();
             sActionDone = 10;
             return;
@@ -3073,7 +3286,7 @@ void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
 // ============================================================================
 // Action: Best Offensive Skill Selection (Charged/Concentrated/3rd-Sem/HighSkill)
 //   aggressive = 0 (Act Freely: Phys HP > 35%, Magic SP > 15%)
-//   aggressive = 1 (Full Assault: Phys HP > 25%, Magic SP > 0%)
+//   aggressive = 1 (Full Assault: Phys HP > 30%, Magic SP > 0%)
 // ============================================================================
 void ACT_BestOffense(int aggressive)
 {
@@ -3089,7 +3302,7 @@ void ACT_BestOffense(int aggressive)
 
     if (aggressive == 1)
     {
-        hpMin = 25;
+        hpMin = 30;
         heavyHpMin = 35;
         spMin = 0;
     }
@@ -3100,37 +3313,44 @@ void ACT_BestOffense(int aggressive)
         spMin = 15;
     }
 
-    // 1. If Charged (0x0100): immediately cash in with strongest Physical skill!
-    if ((AI_CHK_MYHOJO(0x0100) == 1) && (sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > 25))
+    // 1. If Charged (0x0100): immediately cash in with strongest Physical or Gun skill!
+    // (Gun skills also get 2.5x Charge in P5R and work on flying Cognitive Wakaba!)
+    if ((AI_CHK_MYHOJO(0x0100) == 1) && (sLockMode != 1) && (sMyHpPct > 30))
     {
-        TrySignaturePhysSkills(1, 35, 1);
-        if (sActionDone != 0) { return; }
+        if (sNotPhysical == 0)
+        {
+            TrySignaturePhysSkills(1, 35, 1);
+            if (sActionDone != 0) { return; }
 
-        if (IsAoESafeForAttr(0) == 1)
-        {
-            res = AI_ACT_HIGHSKILL(2); // AoE Phys (safe against Phys Repel/Drain/Null & Disaster Shadows)
+            if (IsAoESafeForAttr(0) == 1)
+            {
+                res = AI_ACT_HIGHSKILL(2); // AoE Phys (safe against Phys Repel/Drain/Null & Disaster Shadows)
+                if ((res != -1) && (res != 0))
+                {
+                    sActionDone = 10;
+                    return;
+                }
+            }
+            res = AI_ACT_HIGHSKILL(4); // Single Phys
             if ((res != -1) && (res != 0))
             {
                 sActionDone = 10;
                 return;
             }
-        }
-        res = AI_ACT_HIGHSKILL(4); // Single Phys
-        if ((res != -1) && (res != 0))
-        {
-            sActionDone = 10;
-            return;
-        }
-        // Fallback for AoE-only Physical builds (e.g. Gigantomachia-only Ryuji) against a 1-enemy boss!
-        if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1))
-        {
-            res = AI_ACT_HIGHSKILL(2);
-            if ((res != -1) && (res != 0))
+            // Fallback for AoE-only Physical builds (e.g. Gigantomachia-only Ryuji) against a 1-enemy boss!
+            if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1))
             {
-                sActionDone = 10;
-                return;
+                res = AI_ACT_HIGHSKILL(2);
+                if ((res != -1) && (res != 0))
+                {
+                    sActionDone = 10;
+                    return;
+                }
             }
         }
+        // Cash in Charge with Gun skills (works on flying Wakaba & Phys-immune enemies!)
+        TryGunSkills(30, 35, 1);
+        if (sActionDone != 0) { return; }
     }
 
     // 2. If Concentrated (0x0200): immediately cash in with strongest Magic/Almighty skill!
@@ -3291,6 +3511,12 @@ void ACT_BestOffense(int aggressive)
             if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
         }
     }
+
+    // Gun-skill fallback (handles Haru against flying Cognitive Wakaba & Phys-immune foes!)
+    if ((sIsBoss == 1) || (aggressive == 1) || (AI_CHK_ENALLHP(25) == 0))
+    {
+        TryGunSkills(hpMin, heavyHpMin, sIsBoss);
+    }
 }
 
 // ============================================================================
@@ -3350,9 +3576,13 @@ void ACT_PhysZeroSP()
         }
     }
 
-    // Physical skills blocked when enemies are flying (e.g. Cognitive Wakaba)
+    // Physical skills blocked when enemies are flying (e.g. Cognitive Wakaba) — still allow HP-cost Gun skills!
     if (sNotPhysical == 1)
     {
+        if ((sIsBoss == 1) || (AI_CHK_ENALLHP(25) == 0))
+        {
+            TryGunSkills(55, 60, sIsBoss);
+        }
         return;
     }
 
@@ -3374,7 +3604,7 @@ void ACT_PhysZeroSP()
         }
     }
 
-    // Don't spend HP on non-weakness Physical skills when all normal foes are nearly dead (<= 25% HP)
+    // Don't spend HP on non-weakness Physical/Gun skills when all normal foes are nearly dead (<= 25% HP)
     if ((sIsBoss == 0) && (AI_CHK_ENALLHP(25) == 1))
     {
         return;
@@ -3412,8 +3642,12 @@ void ACT_PhysZeroSP()
         if ((res != -1) && (res != 0))
         {
             sActionDone = 10;
+            return;
         }
     }
+
+    // 6. HP-cost Gun skills fallback (e.g. Haru's Riot Gun / One-shot Kill / Triple Down when Phys is blocked!)
+    TryGunSkills(55, 60, sIsBoss);
 }
 
 // ============================================================================
@@ -3428,10 +3662,21 @@ void ACT_AttackOrGuard()
     // Flying / no-physical encounters (e.g. Cognitive Wakaba) or Maruki Phys lockout
     if ((sNotPhysical == 1) || (sLockMode == 1))
     {
-        // Try Gun first if allowed
+        // Try Gun first if allowed (prefer analyzed Gun-weak, then neutral)
         if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
         {
-            uid = AI_GET_UNINOMALHPMIN(1);
+            uid = AI_GET_UNIWEAK(1);
+            if (uid != -1)
+            {
+                if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 0)
+                {
+                    uid = -1;
+                }
+            }
+            if (uid == -1)
+            {
+                uid = AI_GET_UNINOMALHPMIN(1);
+            }
             if (uid != -1)
             {
                 if (sMyCharId != 7)
@@ -3549,10 +3794,21 @@ void ACT_AttackOrGuard()
         }
     }
 
-    // 4. If all enemies Null/Repel/Drain Phys or are Shocked: try Gun, then non-Phys skill (unless Conserve SP/Forgotten), then Guard!
-    if ((sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
+    // 7. If all enemies Null/Repel/Drain Phys or are Shocked: try Gun, then non-Phys skill (unless Conserve SP/Forgotten), then Guard!
+    if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
     {
-        uid = AI_GET_UNINOMALHPMIN(1);
+        uid = AI_GET_UNIWEAK(1);
+        if (uid != -1)
+        {
+            if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 0)
+            {
+                uid = -1;
+            }
+        }
+        if (uid == -1)
+        {
+            uid = AI_GET_UNINOMALHPMIN(1);
+        }
         if (uid != -1)
         {
             if (sMyCharId != 7)
