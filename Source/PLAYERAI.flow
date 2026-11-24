@@ -3202,8 +3202,8 @@ void ACT_Ailment(int forced)
         return;
     }
 
-    // Don't waste SP casting ailments on nearly-dead trash mobs or when low on SP (unless scripted!)
-    if ((forced == 0) && ((AI_CHK_ENALLHP(30) == 1) || (sMySpPct < 20)))
+    // Don't waste SP casting ailments on nearly-dead trash mobs, at low SP, or into enemy Makarakarn (0x8000 reflects magic ailments!)
+    if ((forced == 0) && ((AI_CHK_ENALLHP(30) == 1) || (sMySpPct < 20) || (AI_CHK_ENHOJO(0x8000) == 1)))
     {
         return;
     }
@@ -3591,6 +3591,13 @@ void ACT_BestOffense(int aggressive)
                 }
             }
         }
+        else if ((sIsUnstable == 0) && ((sEnemyCount == 1) || (sSingleOnlyFlag == 0)))
+        {
+            // Enemy Makarakarn (0x8000) active -> pierce it with Almighty AoE (Megidolaon 72 > Megidola 71 > Megido 70)!
+            if (AI_CHK_MYABLESKIL(72) == 1) { AI_ACT_SKILL(72); AI_TAR_RND(); sActionDone = 10; return; }
+            if (AI_CHK_MYABLESKIL(71) == 1) { AI_ACT_SKILL(71); AI_TAR_RND(); sActionDone = 10; return; }
+            if (AI_CHK_MYABLESKIL(70) == 1) { AI_ACT_SKILL(70); AI_TAR_RND(); sActionDone = 10; return; }
+        }
     }
 
     // 3. Exploit known weaknesses even on already-downed enemies (e.g., bosses or Hold-Up followup)
@@ -3708,6 +3715,14 @@ void ACT_BestOffense(int aggressive)
             res = AI_ACT_HIGHSKILL(1); // AoE Magic fallback on 1 foe
             if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
         }
+    }
+
+    // Almighty pierce through active enemy Makarakarn (0x8000) when elemental Magic was skipped
+    if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 1) && (sIsUnstable == 0) && ((sEnemyCount == 1) || (sSingleOnlyFlag == 0)))
+    {
+        if (AI_CHK_MYABLESKIL(72) == 1) { AI_ACT_SKILL(72); AI_TAR_RND(); sActionDone = 10; return; }
+        if (AI_CHK_MYABLESKIL(71) == 1) { AI_ACT_SKILL(71); AI_TAR_RND(); sActionDone = 10; return; }
+        if (AI_CHK_MYABLESKIL(70) == 1) { AI_ACT_SKILL(70); AI_TAR_RND(); sActionDone = 10; return; }
     }
 
     // Gun-skill fallback (handles Haru against flying Cognitive Wakaba & Phys-immune foes!)
