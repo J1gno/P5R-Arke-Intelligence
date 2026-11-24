@@ -214,17 +214,17 @@ int CountCapableWithoutHojo(int mask)
     return cnt;
 }
 
-// Returns 1 if single-enemy Phys is NOT immune (safe to cast Charge or AoE Phys fallback on 1 foe)
+// Returns 1 if single-enemy Phys is NOT immune or reflected by Tetrakarn (safe for AoE Phys fallback on 1 foe)
 int IsSinglePhysSafe()
 {
-    if ((AI_CHK_ENMUKOU(0) == 1) || (AI_CHK_ENHANSYA(0) == 1) || (AI_CHK_ENKYUSYU(0) == 1))
+    if ((AI_CHK_ENMUKOU(0) == 1) || (AI_CHK_ENHANSYA(0) == 1) || (AI_CHK_ENKYUSYU(0) == 1) || (AI_CHK_ENHOJO(0x4000) == 1))
     {
         return 0;
     }
     return 1;
 }
 
-// Returns 1 if AoE attack of element `attr` is safe (no enemy Null/Repel/Drain,
+// Returns 1 if AoE attack of element `attr` is safe (no enemy Null/Repel/Drain or Karn barrier,
 // no Disaster Shadow, and single-target priority flag not set)
 int IsAoESafeForAttr(int attr)
 {
@@ -237,6 +237,14 @@ int IsAoESafeForAttr(int attr)
         return 0;
     }
     if (sSingleOnlyFlag == 1)
+    {
+        return 0;
+    }
+    if (((attr == 0) || (attr == 1)) && (AI_CHK_ENHOJO(0x4000) == 1))
+    {
+        return 0;
+    }
+    if ((attr >= 2) && (attr <= 9) && (AI_CHK_ENHOJO(0x8000) == 1))
     {
         return 0;
     }
@@ -263,6 +271,10 @@ int IsAoEGunSafe()
         return 0;
     }
     if ((sEnemyCount > 1) && (sSingleOnlyFlag == 1))
+    {
+        return 0;
+    }
+    if (AI_CHK_ENHOJO(0x4000) == 1)
     {
         return 0;
     }
@@ -1150,6 +1162,7 @@ void ACT_EmergencyRezAndHeal()
     int bestPct;
     int critChar;
     int critCount;
+    int badChar;
 
     if (sLockMode == 4)
     {
@@ -1192,11 +1205,6 @@ void ACT_EmergencyRezAndHeal()
             }
         }
         id = id - 1;
-    }
-
-    if (critCount == 0)
-    {
-        return;
     }
 
     if (critCount >= 2)
@@ -1289,6 +1297,69 @@ void ACT_EmergencyRezAndHeal()
             AI_TAR_RND();
             sActionDone = 10;
             return;
+        }
+    }
+
+    // Emergency cure for lethal/catastrophic ailments only: Despair (0x0400) or Brainwash (0x0800)
+    if ((sLockMode != 7) && (AI_CHK_FRBAD(0x0C00) == 1))
+    {
+        badChar = 0;
+        id = 10;
+        while (id >= 1)
+        {
+            if (IsAllyAlive(id) == 1)
+            {
+                if (AI_CHK_FRIDBAD(id, 0x0C00) == 1)
+                {
+                    badChar = id;
+                }
+            }
+            id = id - 1;
+        }
+        if (badChar != 0)
+        {
+            if (AI_CHK_MYABLESKIL(328) == 1)
+            {
+                AI_ACT_SKILL(328); // Energy Drop (4 SP)
+                AI_TAR_UID(AI_GET_UNI(0, badChar));
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(315) == 1)
+            {
+                AI_ACT_SKILL(315); // Amrita Drop (6 SP)
+                AI_TAR_UID(AI_GET_UNI(0, badChar));
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(327) == 1)
+            {
+                AI_ACT_SKILL(327); // Energy Shower (8 SP)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(186) == 1))
+            {
+                AI_ACT_SKILL(186); // Wings of Wisdom (10 SP)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if (AI_CHK_MYABLESKIL(316) == 1)
+            {
+                AI_ACT_SKILL(316); // Amrita Shower (12 SP)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if ((badChar == 1) && (AI_CHK_MYABLESKIL(318) == 1))
+            {
+                AI_ACT_SKILL(318); // Salvation (48 SP — save protagonist from Despair Game Over / Brainwash!)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
     }
 }
@@ -1679,8 +1750,9 @@ void ACT_1MoreWeakness(int aggressive)
         return;
     }
 
-    // 0. Ambush AoE Almighty Down (Guiding Tendril 299, 20 SP, Ring of Sorrow): instant Hold Up on multi-enemy ambushes!
-    if ((sLockMode != 2) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0) && (sEnemyCount >= 2) && (sMySpPct >= 20) && (AI_CHK_MYABLESKIL(299) == 1))
+    // 0. Ambush AoE Almighty Down (Guiding Tendril 299, 20 SP, Ring of Sorrow): instant Hold Up on ambushes!
+    // Skip on bosses (immune to Down) and when Concentrated (don't burn 2.5x Concentrate on a 1-dmg knockdown!)
+    if ((sLockMode != 2) && (sIsBoss == 0) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0) && ((sEnemyCount >= 2) || (sIsHouma == 1)) && (sMySpPct >= 20) && (AI_CHK_MYHOJO(0x0200) == 0) && (AI_CHK_MYABLESKIL(299) == 1))
     {
         AI_ACT_SKILL(299);
         AI_TAR_RND();
@@ -1688,13 +1760,13 @@ void ACT_1MoreWeakness(int aggressive)
         return;
     }
 
-    // 1. Free Gun knockdown on standing Gun-weak enemy (saves SP!)
+    // 1. Free Gun knockdown on standing Gun-weak enemy (saves SP! Skip enemy Tetrakarn 0x4000!)
     if ((sLockMode != 1) && (AI_GET_BULLET() > 0))
     {
         uid = AI_GET_UNIWEAK_ST(1);
         if (uid != -1)
         {
-            if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 if ((sMyCharId != 4) && (sMyCharId != 7))
                 {
@@ -1715,14 +1787,14 @@ void ACT_1MoreWeakness(int aggressive)
     }
 
     // 2. Safe melee-weakness check (Phys-weak standing enemy)
-    // Skip if Charged (don't waste 2.5x Charge on basic melee!), in Full Assault (prefer Phys skills), or if enemy is Shocked (0x04)!
+    // Skip if Charged (don't waste 2.5x Charge on basic melee!), in Full Assault, Shocked (0x04), or Tetrakarn (0x4000)!
     if ((sLockMode != 1) && (sNotPhysical == 0) && (aggressive == 0) && (AI_CHK_MYHOJO(0x0100) == 0))
     {
         res = AI_GET_MYATTRATTACK();
         uid = AI_GET_UNIWEAK_ST(res);
         if (uid != -1)
         {
-            if ((AI_CHK_UNIANALYZE_OPEN(uid, res) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, res) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 AI_ACT_ATTACK();
                 AI_TAR_UID(uid);
@@ -1757,7 +1829,7 @@ void ACT_1MoreWeakness(int aggressive)
             uid = AI_GET_UNIWEAK_ST(attr);
             if (uid != -1)
             {
-                if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1)
+                if ((AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) && (((attr <= 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0)) || ((attr >= 2) && (AI_CHK_UNIHOJO(uid, 0x8000) == 0))))
                 {
                     if (IsAoESafeForAttr(attr) == 1)
                     {
@@ -2989,16 +3061,7 @@ void ACT_Support(int guaranteed)
             return;
         }
     }
-
-    // Engine debuff fallback (bosses only, and skip when Checkmate 292 is available so engine doesn't bypass its 90-SP guard!)
-    if ((guaranteed == 1) && (sIsBoss == 1) && (AI_CHK_MYABLESKIL(292) == 0))
-    {
-        res = AI_ACT_DEBUFF(0);
-        if (res != -1)
-        {
-            sActionDone = 10;
-        }
-    }
+    // (No AI_ACT_DEBUFF(0) fallback: ACT_Support covers all P5R support skills explicitly so the engine cannot bypass Reaper/Revolution/80-95 SP guards!)
 }
 
 // ============================================================================
@@ -3035,21 +3098,21 @@ void ACT_SupportRefresh()
         }
     }
 
-    // Pass 1: count usable refreshable buff/debuff skills (excludes 90-SP Checkmate/Hyakka Ryouran; deduplicates 20-SP Ring vs 24-SP Ma-kaja!)
+    // Pass 1: count usable refreshable buff/debuff skills (excludes 90-SP skills; deduplicates Ring/Ma-kaja/single-kaja!)
     numAvail = 0;
     if (AI_CHK_MYABLESKIL(348) == 1) { numAvail = numAvail + 1; } // Debilitate
     if (AI_CHK_MYABLESKIL(338) == 1) { numAvail = numAvail + 1; } // Heat Riser
     if (AI_CHK_MYABLESKIL(340) == 1) { numAvail = numAvail + 1; } // Matarukaja
+    else if (AI_CHK_MYABLESKIL(335) == 1) { numAvail = numAvail + 1; } // Tarukaja
     if (AI_CHK_MYABLESKIL(185) == 1) { numAvail = numAvail + 1; } // Vault Guardian (20 SP)
     else if (AI_CHK_MYABLESKIL(341) == 1) { numAvail = numAvail + 1; } // Marakukaja (24 SP)
+    else if (AI_CHK_MYABLESKIL(336) == 1) { numAvail = numAvail + 1; } // Rakukaja
     if (AI_CHK_MYABLESKIL(188) == 1) { numAvail = numAvail + 1; } // Gambler's Foresight (20 SP)
     else if (AI_CHK_MYABLESKIL(342) == 1) { numAvail = numAvail + 1; } // Masukukaja (24 SP)
+    else if (AI_CHK_MYABLESKIL(337) == 1) { numAvail = numAvail + 1; } // Sukukaja
     if (AI_CHK_MYABLESKIL(350) == 1) { numAvail = numAvail + 1; } // Matarunda
     if (AI_CHK_MYABLESKIL(351) == 1) { numAvail = numAvail + 1; } // Marakunda
     if (AI_CHK_MYABLESKIL(352) == 1) { numAvail = numAvail + 1; } // Masukunda
-    if (AI_CHK_MYABLESKIL(335) == 1) { numAvail = numAvail + 1; } // Tarukaja
-    if (AI_CHK_MYABLESKIL(336) == 1) { numAvail = numAvail + 1; } // Rakukaja
-    if (AI_CHK_MYABLESKIL(337) == 1) { numAvail = numAvail + 1; } // Sukukaja
     if (AI_CHK_MYABLESKIL(345) == 1) { numAvail = numAvail + 1; } // Tarunda
     if (AI_CHK_MYABLESKIL(346) == 1) { numAvail = numAvail + 1; } // Rakunda
     if (AI_CHK_MYABLESKIL(347) == 1) { numAvail = numAvail + 1; } // Sukunda
@@ -3079,16 +3142,16 @@ void ACT_SupportRefresh()
     if (AI_CHK_MYABLESKIL(348) == 1) { if (idx == pick) { chosen = 348; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(338) == 1) { if (idx == pick) { chosen = 338; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(340) == 1) { if (idx == pick) { chosen = 340; } idx = idx + 1; }
+    else if (AI_CHK_MYABLESKIL(335) == 1) { if (idx == pick) { chosen = 335; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(185) == 1) { if (idx == pick) { chosen = 185; } idx = idx + 1; }
     else if (AI_CHK_MYABLESKIL(341) == 1) { if (idx == pick) { chosen = 341; } idx = idx + 1; }
+    else if (AI_CHK_MYABLESKIL(336) == 1) { if (idx == pick) { chosen = 336; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(188) == 1) { if (idx == pick) { chosen = 188; } idx = idx + 1; }
     else if (AI_CHK_MYABLESKIL(342) == 1) { if (idx == pick) { chosen = 342; } idx = idx + 1; }
+    else if (AI_CHK_MYABLESKIL(337) == 1) { if (idx == pick) { chosen = 337; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(350) == 1) { if (idx == pick) { chosen = 350; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(351) == 1) { if (idx == pick) { chosen = 351; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(352) == 1) { if (idx == pick) { chosen = 352; } idx = idx + 1; }
-    if (AI_CHK_MYABLESKIL(335) == 1) { if (idx == pick) { chosen = 335; } idx = idx + 1; }
-    if (AI_CHK_MYABLESKIL(336) == 1) { if (idx == pick) { chosen = 336; } idx = idx + 1; }
-    if (AI_CHK_MYABLESKIL(337) == 1) { if (idx == pick) { chosen = 337; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(345) == 1) { if (idx == pick) { chosen = 345; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(346) == 1) { if (idx == pick) { chosen = 346; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(347) == 1) { if (idx == pick) { chosen = 347; } idx = idx + 1; }
@@ -3230,10 +3293,13 @@ void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
         }
         if (uid != -1)
         {
-            AI_ACT_SKILL(298);
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
+            if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+            {
+                AI_ACT_SKILL(298);
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
@@ -3261,10 +3327,13 @@ void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
         }
         if (uid != -1)
         {
-            AI_ACT_SKILL(279);
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
+            if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+            {
+                AI_ACT_SKILL(279);
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
@@ -3302,7 +3371,7 @@ void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
 
     gunAoESafe = IsAoESafeForAttr(1);
     gunSingleSafe = 0;
-    if ((AI_CHK_ENMUKOU(1) == 0) && (AI_CHK_ENHANSYA(1) == 0) && (AI_CHK_ENKYUSYU(1) == 0))
+    if ((AI_CHK_ENMUKOU(1) == 0) && (AI_CHK_ENHANSYA(1) == 0) && (AI_CHK_ENKYUSYU(1) == 0) && (AI_CHK_ENHOJO(0x4000) == 0))
     {
         gunSingleSafe = 1;
     }
@@ -3350,26 +3419,29 @@ void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
         }
         if (uid != -1)
         {
-            if (AI_CHK_MYABLESKIL(226) == 1)
+            if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
             {
-                AI_ACT_SKILL(226); // One-shot Kill
-                AI_TAR_UID(uid);
-                sActionDone = 10;
-                return;
-            }
-            if (AI_CHK_MYABLESKIL(228) == 1)
-            {
-                AI_ACT_SKILL(228); // Double Shot
-                AI_TAR_UID(uid);
-                sActionDone = 10;
-                return;
-            }
-            if (AI_CHK_MYABLESKIL(224) == 1)
-            {
-                AI_ACT_SKILL(224); // Snap
-                AI_TAR_UID(uid);
-                sActionDone = 10;
-                return;
+                if (AI_CHK_MYABLESKIL(226) == 1)
+                {
+                    AI_ACT_SKILL(226); // One-shot Kill
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+                if (AI_CHK_MYABLESKIL(228) == 1)
+                {
+                    AI_ACT_SKILL(228); // Double Shot
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+                if (AI_CHK_MYABLESKIL(224) == 1)
+                {
+                    AI_ACT_SKILL(224); // Snap
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
             }
         }
     }
@@ -3442,11 +3514,14 @@ void ACT_BestOffense(int aggressive)
                     return;
                 }
             }
-            res = AI_ACT_HIGHSKILL(4); // Single Phys
-            if ((res != -1) && (res != 0))
+            if (AI_CHK_ENHOJO(0x4000) == 0)
             {
-                sActionDone = 10;
-                return;
+                res = AI_ACT_HIGHSKILL(4); // Single Phys (skip enemy Tetrakarn!)
+                if ((res != -1) && (res != 0))
+                {
+                    sActionDone = 10;
+                    return;
+                }
             }
             // Fallback for AoE-only Physical builds (e.g. Gigantomachia-only Ryuji) against a 1-enemy boss!
             if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1))
@@ -3467,7 +3542,7 @@ void ACT_BestOffense(int aggressive)
     // 2. If Concentrated (0x0200): immediately cash in with strongest Magic/Almighty skill!
     if ((AI_CHK_MYHOJO(0x0200) == 1) && (sLockMode != 2))
     {
-        // Akechi Rebellion Blade (297, 99 SP!): only on bosses or healthy foes in Full Assault!
+        // Akechi Rebellion Blade (297, 99 SP!): Almighty bypasses Makarakarn! Only on bosses or healthy foes in Full Assault!
         if ((AI_CHK_MYABLESKIL(297) == 1) && ((sIsBoss == 1) || ((aggressive == 1) && (sMySpPct >= 35) && (AI_CHK_ENALLHP(40) == 0))))
         {
             AI_ACT_SKILL(297);
@@ -3483,29 +3558,33 @@ void ACT_BestOffense(int aggressive)
             return;
         }
 
-        if ((sEnemyCount > 1) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0))
+        // Skip elemental Magic nukes into active enemy Makarakarn (0x8000) so allies never reflect-kill themselves!
+        if (AI_CHK_ENHOJO(0x8000) == 0)
         {
-            res = AI_ACT_HIGHSKILL(1); // AoE Magic
+            if ((sEnemyCount > 1) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0))
+            {
+                res = AI_ACT_HIGHSKILL(1); // AoE Magic
+                if ((res != -1) && (res != 0))
+                {
+                    sActionDone = 10;
+                    return;
+                }
+            }
+            res = AI_ACT_HIGHSKILL(3); // Single Magic
             if ((res != -1) && (res != 0))
             {
                 sActionDone = 10;
                 return;
             }
-        }
-        res = AI_ACT_HIGHSKILL(3); // Single Magic
-        if ((res != -1) && (res != 0))
-        {
-            sActionDone = 10;
-            return;
-        }
-        // Fallback for AoE-only Magic builds (e.g. Blazing Hell-only Ann) against a 1-enemy boss!
-        if (sEnemyCount == 1)
-        {
-            res = AI_ACT_HIGHSKILL(1);
-            if ((res != -1) && (res != 0))
+            // Fallback for AoE-only Magic builds (e.g. Blazing Hell-only Ann) against a 1-enemy boss!
+            if (sEnemyCount == 1)
             {
-                sActionDone = 10;
-                return;
+                res = AI_ACT_HIGHSKILL(1);
+                if ((res != -1) && (res != 0))
+                {
+                    sActionDone = 10;
+                    return;
+                }
             }
         }
     }
@@ -3530,7 +3609,7 @@ void ACT_BestOffense(int aggressive)
             uid = AI_GET_UNIWEAK(attr);
             if (uid != -1)
             {
-                if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1)
+                if ((AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) && (((attr <= 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0)) || ((attr >= 2) && (AI_CHK_UNIHOJO(uid, 0x8000) == 0))))
                 {
                     if (IsAoESafeForAttr(attr) == 1)
                     {
@@ -3568,15 +3647,15 @@ void ACT_BestOffense(int aggressive)
         if (sActionDone != 0) { return; }
     }
 
-    // 5. High-damage skill dispatch (respecting single-target priority flag, Phys Repel/Drain & Disaster Shadows)
+    // 5. High-damage skill dispatch (respecting single-target priority flag, Karns, Phys Repel/Drain & Disaster Shadows)
     if (sSingleOnlyFlag == 1)
     {
-        if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin))
+        if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin) && (AI_CHK_ENHOJO(0x4000) == 0))
         {
             res = AI_ACT_HIGHSKILL(4); // Single Phys
             if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
         }
-        if ((sLockMode != 2) && (sMySpPct > spMin))
+        if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 0))
         {
             res = AI_ACT_HIGHSKILL(3); // Single Magic
             if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
@@ -3593,20 +3672,20 @@ void ACT_BestOffense(int aggressive)
                 if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
             }
         }
-        if ((sLockMode != 2) && (sMySpPct > spMin))
+        if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 0))
         {
             res = AI_ACT_HIGHSKILL(1); // AoE Magic
             if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
         }
     }
 
-    if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin))
+    if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin) && (AI_CHK_ENHOJO(0x4000) == 0))
     {
         res = AI_ACT_HIGHSKILL(4); // Single Phys
         if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
     }
 
-    if ((sLockMode != 2) && (sMySpPct > spMin))
+    if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 0))
     {
         res = AI_ACT_HIGHSKILL(3); // Single Magic
         if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
@@ -3620,7 +3699,7 @@ void ACT_BestOffense(int aggressive)
             res = AI_ACT_HIGHSKILL(2); // AoE Phys fallback on 1 foe
             if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
         }
-        if ((sLockMode != 2) && (sMySpPct > spMin))
+        if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 0))
         {
             res = AI_ACT_HIGHSKILL(1); // AoE Magic fallback on 1 foe
             if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
@@ -3670,14 +3749,14 @@ void ACT_PhysZeroSP()
         preferHigh = sIsBoss;
     }
 
-    // Even below hpMin, grab a free non-Shocked melee Phys-weak 1-More first (unless Charged!)
+    // Even below hpMin, grab a free non-Shocked melee Phys-weak 1-More first (unless Charged or Tetrakarn!)
     if ((sNotPhysical == 0) && (sNo1MoreFlag == 0) && (sDownCount < sEnemyCount) && (isCharged == 0))
     {
         res = AI_GET_MYATTRATTACK();
         uid = AI_GET_UNIWEAK_ST(res);
         if (uid != -1)
         {
-            if ((AI_CHK_UNIANALYZE_OPEN(uid, res) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, res) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 AI_ACT_ATTACK();
                 AI_TAR_UID(uid);
@@ -3692,11 +3771,11 @@ void ACT_PhysZeroSP()
         return;
     }
 
-    // 1. Standing Gun (1) weakness via HP-cost Gun skill (works even against flying Wakaba!)
+    // 1. Standing Gun (1) weakness via HP-cost Gun skill (works even against flying Wakaba! Skip Tetrakarn!)
     uid = AI_GET_UNIWEAK_ST(1);
     if (uid != -1)
     {
-        if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
         {
             if (IsAoESafeForAttr(1) == 1) { singleOnly = 0; } else { singleOnly = 1; }
             skill = AI_GET_UNIBESTATTRSKIL(uid, 1, singleOnly);
@@ -3724,11 +3803,11 @@ void ACT_PhysZeroSP()
         return;
     }
 
-    // 2. Standing Phys (0) weakness via HP-cost Phys skill
+    // 2. Standing Phys (0) weakness via HP-cost Phys skill (skip Tetrakarn!)
     uid = AI_GET_UNIWEAK_ST(0);
     if (uid != -1)
     {
-        if (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 1)
+        if ((AI_CHK_UNIANALYZE_OPEN(uid, 0) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
         {
             if (IsAoESafeForAttr(0) == 1) { singleOnly = 0; } else { singleOnly = 1; }
             skill = AI_GET_UNIBESTATTRSKIL(uid, 0, singleOnly);
@@ -3759,7 +3838,7 @@ void ACT_PhysZeroSP()
         return;
     }
 
-    // 4. AoE Phys on 2+ foes if safe (no Phys Repel/Drain/Null, no Disaster Shadow)
+    // 4. AoE Phys on 2+ foes if safe (no Phys Repel/Drain/Null, no Tetrakarn, no Disaster Shadow)
     if (IsAoESafeForAttr(0) == 1)
     {
         res = AI_ACT_HIGHSKILL(2);
@@ -3770,12 +3849,15 @@ void ACT_PhysZeroSP()
         }
     }
 
-    // 5. Single-target Phys skill (with single-enemy AoE fallback for AoE-only builds!)
-    res = AI_ACT_HIGHSKILL(4);
-    if ((res != -1) && (res != 0))
+    // 5. Single-target Phys skill (skip enemy Tetrakarn; single-enemy AoE fallback for AoE-only builds!)
+    if (AI_CHK_ENHOJO(0x4000) == 0)
     {
-        sActionDone = 10;
-        return;
+        res = AI_ACT_HIGHSKILL(4);
+        if ((res != -1) && (res != 0))
+        {
+            sActionDone = 10;
+            return;
+        }
     }
 
     if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1))
@@ -3839,7 +3921,7 @@ void ACT_AttackOrGuard()
         }
 
         // Try non-physical skill unless Conserve SP, Forgotten, or Magic locked
-        if ((sOrder != 2) && (sLockMode != 2) && (AI_CHK_MYBAD(0x40) == 0))
+        if ((sOrder != 2) && (sLockMode != 2) && (AI_CHK_MYBAD(0x40) == 0) && (AI_CHK_ENHOJO(0x8000) == 0))
         {
             res = AI_ACT_HIGHSKILL(5);
             if ((res != -1) && (res != 0))
@@ -3975,7 +4057,7 @@ void ACT_AttackOrGuard()
         }
     }
 
-    if ((sOrder != 2) && (sLockMode != 2) && (AI_CHK_MYBAD(0x40) == 0))
+    if ((sOrder != 2) && (sLockMode != 2) && (AI_CHK_MYBAD(0x40) == 0) && (AI_CHK_ENHOJO(0x8000) == 0))
     {
         res = AI_ACT_HIGHSKILL(5);
         if ((res != -1) && (res != 0))
