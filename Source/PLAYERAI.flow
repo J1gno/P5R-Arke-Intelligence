@@ -162,14 +162,62 @@ int IsAllyAlive(int charId)
 }
 
 // Returns 1 if party member charId is free of action-blocking ailments
-// Combined bitmask 0x0D3E = Freeze|Shock|Dizzy|Confuse|Fear|Sleep|Despair|Brainwash (1 COMM call!)
+// Combined bitmask 0x0F3E = Freeze|Shock|Dizzy|Confuse|Fear|Sleep|Rage|Despair|Brainwash, plus Mouse (0x00400000)
 int IsAllyCapable(int charId)
 {
     if (IsAllyAlive(charId) == 0)
     {
         return 0;
     }
-    if (AI_CHK_FRIDBAD(charId, 0x0D3E) == 1)
+    if ((AI_CHK_FRIDBAD(charId, 0x0F3E) == 1) || (AI_CHK_FRIDBAD(charId, 0x00400000) == 1))
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// Returns 1 if party member charId can use Persona skills (not incapacitated and not Forgotten 0x40)
+int IsAllySkillCapable(int charId)
+{
+    if (IsAllyCapable(charId) == 0)
+    {
+        return 0;
+    }
+    if (AI_CHK_FRIDBAD(charId, 0x40) == 1)
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// Counts capable alive party members missing HOJO bit `mask` (for 80-SP party Charge/Concentrate checks)
+int CountCapableWithoutHojo(int mask)
+{
+    int id;
+    int cnt;
+    cnt = 0;
+    id = 1;
+    while (id <= 10)
+    {
+        if (id != 8)
+        {
+            if (IsAllySkillCapable(id) == 1)
+            {
+                if (AI_CHK_FRIDHOJO(id, mask) == 0)
+                {
+                    cnt = cnt + 1;
+                }
+            }
+        }
+        id = id + 1;
+    }
+    return cnt;
+}
+
+// Returns 1 if single-enemy Phys is NOT immune (safe to cast Charge or AoE Phys fallback on 1 foe)
+int IsSinglePhysSafe()
+{
+    if ((AI_CHK_ENMUKOU(0) == 1) || (AI_CHK_ENHANSYA(0) == 1) || (AI_CHK_ENKYUSYU(0) == 1))
     {
         return 0;
     }
@@ -366,16 +414,20 @@ void AI_pattern_Free()
     if (sActionDone != 0) { return; }
 
     // Always dispel dangerous enemy buffs / party debuffs; probabilistically cast buffs/debuffs
+    // (Skip optional support/ailment rolls if already Charged/Concentrated so we cash in the 2.5x nuke!)
     ACT_UrgentDispel();
     if (sActionDone != 0) { return; }
 
-    if ((sIsBoss == 1) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
+    if (AI_CHK_MYHOJO(0x0300) == 0)
     {
-        roll = RND(100);
-        if ((roll < 25) || ((sIsSupportChar == 1) && (roll < 40)) || ((sIsBoss == 1) && (roll < 45)))
+        if ((sIsBoss == 1) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
         {
-            ACT_Support(0);
-            if (sActionDone != 0) { return; }
+            roll = RND(100);
+            if ((roll < 25) || ((sIsSupportChar == 1) && (roll < 40)) || ((sIsBoss == 1) && (roll < 45)))
+            {
+                ACT_Support(0);
+                if (sActionDone != 0) { return; }
+            }
         }
     }
 
@@ -386,7 +438,7 @@ void AI_pattern_Free()
     ACT_UnknownAttr();
     if (sActionDone != 0) { return; }
 
-    if ((sAilmentPrioFlag == 0) && (sIsBoss == 0))
+    if ((sAilmentPrioFlag == 0) && (sIsBoss == 0) && (AI_CHK_MYHOJO(0x0300) == 0))
     {
         roll = RND(100);
         if ((roll < 20) || (((sMyCharId == 4) || (sMyCharId == 7)) && (roll < 35)))
@@ -636,9 +688,11 @@ void ACT_Showtime(int aggressive)
         return;
     }
 
-    // Trigger Showtime on: Bosses, Disaster Shadows,
-    // Full Assault (if at least one foe > 20% HP), or any healthy foe (> 50% HP)
-    if ((sIsBoss == 1) || (sIsUnstable == 1) || ((aggressive == 1) && (AI_CHK_ENALLHP(20) == 0)) || (AI_CHK_ENALLHP(50) == 0))
+    // Trigger Showtime on:
+    //   - Bosses and Disaster Shadows (always worthy)
+    //   - Full Assault: any fight with at least one foe > 35% HP
+    //   - Other tactics: normal fights only when party is pressured (<= 50% HP) or multiple healthy foes (>= 2, > 65% HP, 50% roll)
+    if ((sIsBoss == 1) || (sIsUnstable == 1) || ((aggressive == 1) && (AI_CHK_ENALLHP(35) == 0)) || (AI_CHK_FRHP(50) == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(65) == 0) && (RND(100) < 50)))
     {
         AI_ACT_SP_ATTACK();
         if (sIsUnstable == 1)
@@ -957,7 +1011,7 @@ void ACT_Heal(int proactive)
     }
 
     // 3. Only AoE heals available (common for late-game Morgana/Makoto!) -> use AoE heal
-    if ((hasMulti == 1) && ((critCount >= 1) || (proactive == 1) || (worstChar == 1)))
+    if ((hasMulti == 1) && ((critCount >= 1) || (proactive == 1) || (worstChar == 1) || (bestPct <= 55)))
     {
         if ((critCount >= 1) && (AI_CHK_MYABLESKIL(307) == 1))
         {
@@ -1003,8 +1057,8 @@ void ACT_Heal(int proactive)
         }
     }
 
-    // Fallback to engine heal if urgent
-    if (critCount >= 1)
+    // Fallback to engine heal if urgent (skip on Maruki Mode 7 so engine doesn't pick Salvation!)
+    if ((critCount >= 1) && (sLockMode != 7))
     {
         res = AI_ACT_HEAL(0);
         if (res != -1)
@@ -1245,8 +1299,8 @@ void ACT_CureAilment()
             sActionDone = 10;
             return;
         }
-        // Full-party multi-family cures: Wings of Wisdom (10 SP) > Amrita Shower (12 SP)
-        if (AI_CHK_MYABLESKIL(186) == 1)
+        // Full-party multi-family cures: Wings of Wisdom (10 SP, Support -> skip Maruki Mode 3!) > Amrita Shower (12 SP)
+        if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(186) == 1))
         {
             AI_ACT_SKILL(186); // Wings of Wisdom
             AI_TAR_RND();
@@ -1301,13 +1355,6 @@ void ACT_CureAilment()
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(327) == 1)
-        {
-            AI_ACT_SKILL(327); // Energy Shower
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
-        }
     }
 
     if ((patraCount >= 1) && (patraChar != 0))
@@ -1316,13 +1363,6 @@ void ACT_CureAilment()
         {
             AI_ACT_SKILL(325); // Patra
             AI_TAR_UID(AI_GET_UNI(0, patraChar));
-            sActionDone = 10;
-            return;
-        }
-        if (AI_CHK_MYABLESKIL(330) == 1)
-        {
-            AI_ACT_SKILL(330); // Me Patra
-            AI_TAR_RND();
             sActionDone = 10;
             return;
         }
@@ -1337,16 +1377,9 @@ void ACT_CureAilment()
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(331) == 1)
-        {
-            AI_ACT_SKILL(331); // Mabaisudi
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
-        }
     }
 
-    // 3. Universal single/party cures fallback (Amrita Drop 6 SP > Wings 10 SP > Amrita Shower 12 SP > Salvation)
+    // 3. Universal single-target cure (Amrita Drop 6 SP) before 8-12 SP AoE cures
     if ((anyChar != 0) && (AI_CHK_MYABLESKIL(315) == 1))
     {
         AI_ACT_SKILL(315); // Amrita Drop
@@ -1354,7 +1387,32 @@ void ACT_CureAilment()
         sActionDone = 10;
         return;
     }
-    if (AI_CHK_MYABLESKIL(186) == 1)
+
+    // 4. Family AoE cures (8 SP) if single-target cures aren't available
+    if ((energyCount >= 1) && (AI_CHK_MYABLESKIL(327) == 1))
+    {
+        AI_ACT_SKILL(327); // Energy Shower
+        AI_TAR_RND();
+        sActionDone = 10;
+        return;
+    }
+    if ((patraCount >= 1) && (AI_CHK_MYABLESKIL(330) == 1))
+    {
+        AI_ACT_SKILL(330); // Me Patra
+        AI_TAR_RND();
+        sActionDone = 10;
+        return;
+    }
+    if ((elemCount >= 1) && (AI_CHK_MYABLESKIL(331) == 1))
+    {
+        AI_ACT_SKILL(331); // Mabaisudi
+        AI_TAR_RND();
+        sActionDone = 10;
+        return;
+    }
+
+    // 5. Full-party universal cure fallback (Wings 10 SP > Amrita Shower 12 SP > Salvation 48 SP on boss/severe only)
+    if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(186) == 1))
     {
         AI_ACT_SKILL(186); // Wings of Wisdom
         AI_TAR_RND();
@@ -1370,10 +1428,14 @@ void ACT_CureAilment()
     }
     if (AI_CHK_MYABLESKIL(318) == 1)
     {
-        AI_ACT_SKILL(318); // Salvation
-        AI_TAR_RND();
-        sActionDone = 10;
-        return;
+        // Don't burn 48-SP Salvation on a single minor ailment (Burn/Hunger/Forget) in a normal trash fight!
+        if ((sIsBoss == 1) || (totalCount >= 2) || (AI_CHK_FRBAD(0x0F3E) == 1))
+        {
+            AI_ACT_SKILL(318); // Salvation
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
     }
 
     // Engine fallback
@@ -1391,15 +1453,16 @@ void ACT_ChargeConcentrate(int aggressive)
 {
     int enemyHealthy;
     int canUse;
+    int physOk;
 
     if (sLockMode == 3)
     {
         return;
     }
 
-    // Don't waste Charge/Concentrate on normal mobs if all foes <= 50% HP
+    // Don't waste Charge/Concentrate if enemies are nearly dead (<= 15% on bosses, <= 50% on normal mobs)
     enemyHealthy = 0;
-    if ((sIsBoss == 1) || (AI_CHK_ENALLHP(50) == 0))
+    if (((sIsBoss == 1) && (AI_CHK_ENALLHP(15) == 0)) || ((sIsBoss == 0) && (AI_CHK_ENALLHP(50) == 0)))
     {
         enemyHealthy = 1;
     }
@@ -1437,10 +1500,21 @@ void ACT_ChargeConcentrate(int aggressive)
         return;
     }
 
-    // Party-wide Charge: Fighting Spirit (290, 80 SP, Ryuji 3rd sem)
-    if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
+    // Skip Physical Charge if fighting a lone enemy that Nulls/Repels/Drains Physical
+    physOk = 1;
+    if ((sNotPhysical == 1) || (sLockMode == 1))
     {
-        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+        physOk = 0;
+    }
+    else if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 0))
+    {
+        physOk = 0;
+    }
+
+    // Party-wide Charge: Fighting Spirit (290, 80 SP, Ryuji 3rd sem) — boss-only & requires >= 2 un-Charged allies!
+    if ((physOk == 1) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MYABLESKIL(290) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
+    {
+        if (CountCapableWithoutHojo(0x0100) >= 2)
         {
             AI_ACT_SKILL(290);
             AI_TAR_RND();
@@ -1449,10 +1523,10 @@ void ACT_ChargeConcentrate(int aggressive)
         }
     }
 
-    // Party-wide Concentrate: High Energy (294, 80 SP, Ann 3rd sem)
-    if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(294) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
+    // Party-wide Concentrate: High Energy (294, 80 SP, Ann 3rd sem) — boss-only & requires >= 2 un-Concentrated allies!
+    if ((sLockMode != 2) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MYABLESKIL(294) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
     {
-        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+        if (CountCapableWithoutHojo(0x0200) >= 2)
         {
             AI_ACT_SKILL(294);
             AI_TAR_RND();
@@ -1462,7 +1536,7 @@ void ACT_ChargeConcentrate(int aggressive)
     }
 
     // Self Charge (360)
-    if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(360) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
+    if ((physOk == 1) && (AI_CHK_MYABLESKIL(360) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
     {
         if ((sMyHpPct > 40) && ((aggressive == 1) || (sMySpPct >= 20)))
         {
@@ -1473,10 +1547,10 @@ void ACT_ChargeConcentrate(int aggressive)
         }
     }
 
-    // Self Concentrate (361)
+    // Self Concentrate (361) — keep >= 15% SP even in Full Assault so caster can still cast a spell next turn!
     if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(361) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
     {
-        if ((aggressive == 1) || (sMySpPct >= 25))
+        if (((aggressive == 1) && (sMySpPct >= 15)) || (sMySpPct >= 25))
         {
             AI_ACT_SKILL(361);
             AI_TAR_MINE();
@@ -1535,14 +1609,21 @@ void ACT_1MoreWeakness(int aggressive)
         }
     }
 
-    // 2. Engine melee-weakness check (Phys-weak standing enemy)
-    if ((sLockMode != 1) && (sNotPhysical == 0))
+    // 2. Safe melee-weakness check (Phys-weak standing enemy)
+    // Skip if Charged (don't waste 2.5x Charge on basic melee!), in Full Assault (prefer Phys skills), or if enemy is Shocked (0x04)!
+    if ((sLockMode != 1) && (sNotPhysical == 0) && (aggressive == 0) && (AI_CHK_MYHOJO(0x0100) == 0))
     {
-        res = AI_ACT_ATTACK_WEAK(0);
-        if (res != -1)
+        res = AI_GET_MYATTRATTACK();
+        uid = AI_GET_UNIWEAK_ST(res);
+        if (uid != -1)
         {
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, res) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+            {
+                AI_ACT_ATTACK();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
@@ -1605,6 +1686,8 @@ void ACT_Takeover()
 {
     int id;
     int critLow;
+    int targetUid;
+    int targetOrder;
 
     if (sLockMode == 6)
     {
@@ -1616,13 +1699,13 @@ void ACT_Takeover()
         return;
     }
 
-    // Priority 1: Pass to a capable ally who can knock down a standing enemy
+    // Priority 1: Pass to a skill-capable ally who can knock down a standing enemy
     id = 2;
     while (id <= 10)
     {
         if (id != 8)
         {
-            if (IsAllyCapable(id) == 1)
+            if (IsAllySkillCapable(id) == 1)
             {
                 if ((AI_CHK_TAKEOVER(id) == 1) && (AI_CHK_ABLEWEAK(id) == 1))
                 {
@@ -1634,7 +1717,7 @@ void ACT_Takeover()
         }
         id = id + 1;
     }
-    if (IsAllyCapable(1) == 1)
+    if (IsAllySkillCapable(1) == 1)
     {
         if ((AI_CHK_TAKEOVER(1) == 1) && (AI_CHK_ABLEWEAK(1) == 1))
         {
@@ -1644,36 +1727,44 @@ void ACT_Takeover()
         }
     }
 
-    // Priority 2: Pass to a capable ally who can trigger a Technical attack!
-    id = 2;
-    while (id <= 10)
+    // Priority 2: Pass to a skill-capable ally who can trigger a Technical attack!
+    // (Skip if acting character is already Charged/Concentrated so they unleash their own boosted nuke!)
+    if (AI_CHK_MYHOJO(0x0300) == 0)
     {
-        if (id != 8)
+        id = 2;
+        while (id <= 10)
         {
-            if (IsAllyCapable(id) == 1)
+            if (id != 8)
             {
-                if ((AI_CHK_TAKEOVER(id) == 1) && (AI_CHK_FRIDTECH(id) == 1))
+                if (IsAllySkillCapable(id) == 1)
                 {
-                    AI_ACT_TAKEOVER(id);
-                    sActionDone = 10;
-                    return;
+                    if ((AI_CHK_TAKEOVER(id) == 1) && (AI_CHK_FRIDTECH(id) == 1))
+                    {
+                        targetUid = AI_GET_UNI(0, id);
+                        if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) != 2) && (AI_GET_P_ORDER(targetUid) != 3))
+                        {
+                            AI_ACT_TAKEOVER(id);
+                            sActionDone = 10;
+                            return;
+                        }
+                    }
                 }
             }
+            id = id + 1;
         }
-        id = id + 1;
-    }
-    if (IsAllyCapable(1) == 1)
-    {
-        if ((AI_CHK_TAKEOVER(1) == 1) && (AI_CHK_FRIDTECH(1) == 1))
+        if (IsAllySkillCapable(1) == 1)
         {
-            AI_ACT_TAKEOVER(1);
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_TAKEOVER(1) == 1) && (AI_CHK_FRIDTECH(1) == 1))
+            {
+                AI_ACT_TAKEOVER(1);
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
     // Priority 3: If an ally is critically low (<= 40% HP) and healing isn't locked, pass to a healer
-    // Computed lazily here (only on 1-More turns!) instead of every turn in Initialize().
+    // (Skip healers set to Full Assault since they won't heal!)
     if (sLockMode != 4)
     {
         critLow = 0;
@@ -1691,34 +1782,46 @@ void ACT_Takeover()
         }
         if (critLow == 1)
         {
-            if (IsAllyCapable(3) == 1)
+            if (IsAllySkillCapable(3) == 1)
             {
                 if ((AI_CHK_TAKEOVER(3) == 1) && (AI_CHK_FRIDHREC(3) == 1))
                 {
-                    AI_ACT_TAKEOVER(3);
-                    sActionDone = 10;
-                    return;
+                    targetUid = AI_GET_UNI(0, 3);
+                    if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) != 1))
+                    {
+                        AI_ACT_TAKEOVER(3);
+                        sActionDone = 10;
+                        return;
+                    }
                 }
             }
-            if (IsAllyCapable(6) == 1)
+            if (IsAllySkillCapable(6) == 1)
             {
                 if ((AI_CHK_TAKEOVER(6) == 1) && (AI_CHK_FRIDHREC(6) == 1))
                 {
-                    AI_ACT_TAKEOVER(6);
-                    sActionDone = 10;
-                    return;
+                    targetUid = AI_GET_UNI(0, 6);
+                    if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) != 1))
+                    {
+                        AI_ACT_TAKEOVER(6);
+                        sActionDone = 10;
+                        return;
+                    }
                 }
             }
-            if (IsAllyCapable(4) == 1)
+            if (IsAllySkillCapable(4) == 1)
             {
                 if ((AI_CHK_TAKEOVER(4) == 1) && (AI_CHK_FRIDHREC(4) == 1))
                 {
-                    AI_ACT_TAKEOVER(4);
-                    sActionDone = 10;
-                    return;
+                    targetUid = AI_GET_UNI(0, 4);
+                    if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) != 1))
+                    {
+                        AI_ACT_TAKEOVER(4);
+                        sActionDone = 10;
+                        return;
+                    }
                 }
             }
-            if (IsAllyCapable(1) == 1)
+            if (IsAllySkillCapable(1) == 1)
             {
                 if ((AI_CHK_TAKEOVER(1) == 1) && (AI_CHK_FRIDHREC(1) == 1))
                 {
@@ -1730,25 +1833,33 @@ void ACT_Takeover()
         }
     }
 
-    // Priority 4: Don't waste Baton Pass boost — pass to a Charged/Concentrated ally or Joker!
+    // Priority 4: Don't waste Baton Pass boost — pass to a Charged/Concentrated attacker or Joker!
     // (Skip if acting character is already Charged/Concentrated (0x0300) so they unleash their own nuke!)
     if (AI_CHK_MYHOJO(0x0300) == 0)
     {
-        // Pass to a Charged or Concentrated ally first
+        // Pass to a Charged or Concentrated attacking ally first (skip Heal/Support allies; skip Conserve SP if Concentrated)
         id = 2;
         while (id <= 10)
         {
             if (id != 8)
             {
-                if (IsAllyCapable(id) == 1)
+                if (IsAllySkillCapable(id) == 1)
                 {
                     if (AI_CHK_TAKEOVER(id) == 1)
                     {
-                        if (AI_CHK_FRIDHOJO(id, 0x0300) == 1)
+                        targetUid = AI_GET_UNI(0, id);
+                        if (targetUid != -1)
                         {
-                            AI_ACT_TAKEOVER(id);
-                            sActionDone = 10;
-                            return;
+                            targetOrder = AI_GET_P_ORDER(targetUid);
+                            if (targetOrder != 3)
+                            {
+                                if ((AI_CHK_FRIDHOJO(id, 0x0100) == 1) || ((targetOrder != 2) && (AI_CHK_FRIDHOJO(id, 0x0200) == 1)))
+                                {
+                                    AI_ACT_TAKEOVER(id);
+                                    sActionDone = 10;
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
@@ -1767,18 +1878,17 @@ void ACT_Takeover()
             }
         }
 
-        // In Full Assault or Heal/Support, chain Baton Pass to heaviest hitters first
-        // Priority: Ryuji (2) > Ann (4) > Yusuke (5) > Akechi (9) > Sumire (10) > Haru (7) > Makoto (6) > Morgana (3)
-        if ((sOrder == 1) || (sOrder == 3))
+        // In Heal/Support (or Full Assault when a support/healer got a 1-More), pass to an attacking DPS ally
+        // Never pass offensively to allies set to Heal/Support (3) or Conserve SP (2)!
+        if ((sOrder == 3) || ((sOrder == 1) && (sIsHealerChar == 1)))
         {
-            if (IsAllyCapable(2) == 1)  { if (AI_CHK_TAKEOVER(2) == 1)  { AI_ACT_TAKEOVER(2);  sActionDone = 10; return; } }
-            if (IsAllyCapable(4) == 1)  { if (AI_CHK_TAKEOVER(4) == 1)  { AI_ACT_TAKEOVER(4);  sActionDone = 10; return; } }
-            if (IsAllyCapable(5) == 1)  { if (AI_CHK_TAKEOVER(5) == 1)  { AI_ACT_TAKEOVER(5);  sActionDone = 10; return; } }
-            if (IsAllyCapable(9) == 1)  { if (AI_CHK_TAKEOVER(9) == 1)  { AI_ACT_TAKEOVER(9);  sActionDone = 10; return; } }
-            if (IsAllyCapable(10) == 1) { if (AI_CHK_TAKEOVER(10) == 1) { AI_ACT_TAKEOVER(10); sActionDone = 10; return; } }
-            if (IsAllyCapable(7) == 1)  { if (AI_CHK_TAKEOVER(7) == 1)  { AI_ACT_TAKEOVER(7);  sActionDone = 10; return; } }
-            if (IsAllyCapable(6) == 1)  { if (AI_CHK_TAKEOVER(6) == 1)  { AI_ACT_TAKEOVER(6);  sActionDone = 10; return; } }
-            if (IsAllyCapable(3) == 1)  { if (AI_CHK_TAKEOVER(3) == 1)  { AI_ACT_TAKEOVER(3);  sActionDone = 10; return; } }
+            if (IsAllySkillCapable(2) == 1)  { if (AI_CHK_TAKEOVER(2) == 1)  { targetUid = AI_GET_UNI(0, 2);  if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) <= 1)) { AI_ACT_TAKEOVER(2);  sActionDone = 10; return; } } }
+            if (IsAllySkillCapable(4) == 1)  { if (AI_CHK_TAKEOVER(4) == 1)  { targetUid = AI_GET_UNI(0, 4);  if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) <= 1)) { AI_ACT_TAKEOVER(4);  sActionDone = 10; return; } } }
+            if (IsAllySkillCapable(5) == 1)  { if (AI_CHK_TAKEOVER(5) == 1)  { targetUid = AI_GET_UNI(0, 5);  if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) <= 1)) { AI_ACT_TAKEOVER(5);  sActionDone = 10; return; } } }
+            if (IsAllySkillCapable(9) == 1)  { if (AI_CHK_TAKEOVER(9) == 1)  { targetUid = AI_GET_UNI(0, 9);  if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) <= 1)) { AI_ACT_TAKEOVER(9);  sActionDone = 10; return; } } }
+            if (IsAllySkillCapable(10) == 1) { if (AI_CHK_TAKEOVER(10) == 1) { targetUid = AI_GET_UNI(0, 10); if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) <= 1)) { AI_ACT_TAKEOVER(10); sActionDone = 10; return; } } }
+            if (IsAllySkillCapable(7) == 1)  { if (AI_CHK_TAKEOVER(7) == 1)  { targetUid = AI_GET_UNI(0, 7);  if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) <= 1)) { AI_ACT_TAKEOVER(7);  sActionDone = 10; return; } } }
+            if (IsAllySkillCapable(6) == 1)  { if (AI_CHK_TAKEOVER(6) == 1)  { targetUid = AI_GET_UNI(0, 6);  if ((targetUid != -1) && (AI_GET_P_ORDER(targetUid) <= 1)) { AI_ACT_TAKEOVER(6);  sActionDone = 10; return; } } }
         }
     }
 }
@@ -1790,13 +1900,17 @@ void ACT_Technical()
 {
     int res;
 
-    // Akechi's 3rd-semester Rebellion Blade (297): colossal Almighty bonus on Downed foes!
+    // Akechi's 3rd-semester Rebellion Blade (297, 99 SP!): colossal Almighty bonus on Downed foes!
+    // Only spend 99 SP on bosses, or on healthy foes in Full Assault with spare SP (never on dying trash mobs!)
     if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(297) == 1) && (AI_CHK_ENBAD(0x00100000) == 1))
     {
-        AI_ACT_SKILL(297);
-        AI_TAR_BAD(0x00100000);
-        sActionDone = 10;
-        return;
+        if ((sIsBoss == 1) || ((sOrder == 1) && (sMySpPct >= 35) && (AI_CHK_ENALLHP(40) == 0)))
+        {
+            AI_ACT_SKILL(297);
+            AI_TAR_BAD(0x00100000);
+            sActionDone = 10;
+            return;
+        }
     }
 
     if ((sLockMode == 1) || (sLockMode == 2))
@@ -1989,32 +2103,35 @@ void ACT_UrgentDispel()
 
 // ============================================================================
 // Helper: Pick best un-Concentrated Magic ally for President's Insight (187)
-// Priority: Ann (4) > Makoto (6) > Haru (7) > Morgana (3) > Akechi (9) > Joker (1)
-// (Nested guards prevent non-short-circuit evaluation on benched allies!)
+// Priority: Joker (1) > Ann (4) > Makoto (6) > Haru (7) > Akechi (9) > Morgana (3)
+// Skips Forgotten/incapacitated allies and AI allies on Conserve SP (2) or Heal/Support (3)!
 // ============================================================================
 int PickConcentrateAlly()
 {
-    if (IsAllyCapable(4) == 1) { if (AI_CHK_FRIDHOJO(4, 0x0200) == 0) { return 4; } }
-    if (IsAllyCapable(6) == 1) { if (AI_CHK_FRIDHOJO(6, 0x0200) == 0) { return 6; } }
-    if (IsAllyCapable(7) == 1) { if (AI_CHK_FRIDHOJO(7, 0x0200) == 0) { return 7; } }
-    if (IsAllyCapable(3) == 1) { if (AI_CHK_FRIDHOJO(3, 0x0200) == 0) { return 3; } }
-    if (IsAllyCapable(9) == 1) { if (AI_CHK_FRIDHOJO(9, 0x0200) == 0) { return 9; } }
-    if (IsAllyCapable(1) == 1) { if (AI_CHK_FRIDHOJO(1, 0x0200) == 0) { return 1; } }
+    int uid;
+    if (IsAllySkillCapable(1) == 1) { if (AI_CHK_FRIDHOJO(1, 0x0200) == 0) { return 1; } }
+    if (IsAllySkillCapable(4) == 1) { uid = AI_GET_UNI(0, 4); if ((uid != -1) && (AI_GET_P_ORDER(uid) <= 1) && (AI_CHK_FRIDHOJO(4, 0x0200) == 0)) { return 4; } }
+    if (IsAllySkillCapable(6) == 1) { uid = AI_GET_UNI(0, 6); if ((uid != -1) && (AI_GET_P_ORDER(uid) <= 1) && (AI_CHK_FRIDHOJO(6, 0x0200) == 0)) { return 6; } }
+    if (IsAllySkillCapable(7) == 1) { uid = AI_GET_UNI(0, 7); if ((uid != -1) && (AI_GET_P_ORDER(uid) <= 1) && (AI_CHK_FRIDHOJO(7, 0x0200) == 0)) { return 7; } }
+    if (IsAllySkillCapable(9) == 1) { uid = AI_GET_UNI(0, 9); if ((uid != -1) && (AI_GET_P_ORDER(uid) <= 1) && (AI_CHK_FRIDHOJO(9, 0x0200) == 0)) { return 9; } }
+    if (IsAllySkillCapable(3) == 1) { uid = AI_GET_UNI(0, 3); if ((uid != -1) && (AI_GET_P_ORDER(uid) <= 1) && (AI_CHK_FRIDHOJO(3, 0x0200) == 0)) { return 3; } }
     return 0;
 }
 
 // ============================================================================
 // Helper: Pick best un-Charged Physical ally for Tyrant's Will (189)
-// Priority: Ryuji (2) > Sumire (10) > Yusuke (5) > Akechi (9) > Haru (7) > Joker (1)
+// Priority: Joker (1) > Ryuji (2) > Sumire (10) > Yusuke (5) > Akechi (9) > Haru (7)
+// Skips Forgotten/incapacitated allies, Heal/Support (3) allies, and critically low HP allies!
 // ============================================================================
 int PickChargeAlly()
 {
-    if (IsAllyCapable(2) == 1)  { if (AI_CHK_FRIDHOJO(2, 0x0100) == 0)  { return 2; } }
-    if (IsAllyCapable(10) == 1) { if (AI_CHK_FRIDHOJO(10, 0x0100) == 0) { return 10; } }
-    if (IsAllyCapable(5) == 1)  { if (AI_CHK_FRIDHOJO(5, 0x0100) == 0)  { return 5; } }
-    if (IsAllyCapable(9) == 1)  { if (AI_CHK_FRIDHOJO(9, 0x0100) == 0)  { return 9; } }
-    if (IsAllyCapable(7) == 1)  { if (AI_CHK_FRIDHOJO(7, 0x0100) == 0)  { return 7; } }
-    if (IsAllyCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x0100) == 0)  { return 1; } }
+    int uid;
+    if (IsAllySkillCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x0100) == 0)  { return 1; } }
+    if (IsAllySkillCapable(2) == 1)  { uid = AI_GET_UNI(0, 2);  if ((uid != -1) && (AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(2, 35) == 0)  && (AI_CHK_FRIDHOJO(2, 0x0100) == 0))  { return 2; } }
+    if (IsAllySkillCapable(10) == 1) { uid = AI_GET_UNI(0, 10); if ((uid != -1) && (AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(10, 35) == 0) && (AI_CHK_FRIDHOJO(10, 0x0100) == 0)) { return 10; } }
+    if (IsAllySkillCapable(5) == 1)  { uid = AI_GET_UNI(0, 5);  if ((uid != -1) && (AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(5, 35) == 0)  && (AI_CHK_FRIDHOJO(5, 0x0100) == 0))  { return 5; } }
+    if (IsAllySkillCapable(9) == 1)  { uid = AI_GET_UNI(0, 9);  if ((uid != -1) && (AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(9, 35) == 0)  && (AI_CHK_FRIDHOJO(9, 0x0100) == 0))  { return 9; } }
+    if (IsAllySkillCapable(7) == 1)  { uid = AI_GET_UNI(0, 7);  if ((uid != -1) && (AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(7, 35) == 0)  && (AI_CHK_FRIDHOJO(7, 0x0100) == 0))  { return 7; } }
     return 0;
 }
 
@@ -2103,33 +2220,33 @@ void ACT_Support(int guaranteed)
         return;
     }
 
-    // 2. Party-wide All-Stat Debuff: Checkmate (292, 90 SP, Makoto 3rd sem)
-    if (AI_CHK_MYABLESKIL(292) == 1)
+    // 2. Party-wide All-Stat Debuff: Checkmate (292, 90 SP, Makoto 3rd sem) — boss-only & requires >= 2 missing debuffs (or multi-foe boss)
+    if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(292) == 1))
     {
-        if ((AI_CHK_NOTENHOJO(0x02) == 1) || (AI_CHK_NOTENHOJO(0x20) == 1) || (AI_CHK_NOTENHOJO(0x08) == 1))
+        if ((sEnemyCount >= 2) || (AI_CHK_MYABLESKIL(348) == 0))
         {
-            if ((sIsBoss == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+            if (((AI_CHK_NOTENHOJO(0x20) == 1) && (AI_CHK_NOTENHOJO(0x02) == 1)) || ((AI_CHK_NOTENHOJO(0x20) == 1) && (AI_CHK_NOTENHOJO(0x08) == 1)) || ((AI_CHK_NOTENHOJO(0x02) == 1) && (AI_CHK_NOTENHOJO(0x08) == 1)))
             {
-                if ((sEnemyCount >= 2) || (AI_CHK_MYABLESKIL(348) == 0))
-                {
-                    AI_ACT_SKILL(292);
-                    AI_TAR_RND();
-                    sActionDone = 10;
-                    return;
-                }
+                AI_ACT_SKILL(292);
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
             }
         }
     }
 
-    // 3. Single-target All-Stat Debuff: Debilitate (348)
+    // 3. Single-target All-Stat Debuff: Debilitate (348, 30 SP)
     if (AI_CHK_MYABLESKIL(348) == 1)
     {
-        if ((AI_CHK_NOTENHOJO(0x20) == 1) && (AI_CHK_NOTENHOJO(0x02) == 1))
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 40)))
         {
-            AI_ACT_SKILL(348);
-            AI_TAR_NOTHOJO(0x20);
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_NOTENHOJO(0x20) == 1) && (AI_CHK_NOTENHOJO(0x02) == 1))
+            {
+                AI_ACT_SKILL(348);
+                AI_TAR_NOTHOJO(0x20);
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
@@ -2215,22 +2332,27 @@ void ACT_Support(int guaranteed)
     // 5. Party-wide All-Stat Buffs: Hyakka Ryouran (293, 90 SP, Yusuke 3rd sem) / Thermopylae (343)
     if ((AI_CHK_MYABLESKIL(293) == 1) || (AI_CHK_MYABLESKIL(343) == 1))
     {
-        allyId = PickAllyWithoutHojo(0x01);
-        if (allyId == 0) { allyId = PickAllyWithoutHojo(0x10); }
-        if (allyId == 0) { allyId = PickAllyWithoutHojo(0x04); }
-        if (allyId != 0)
+        if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(293) == 1))
         {
-            if (AI_CHK_MYABLESKIL(293) == 1)
+            // Only spend 90 SP on Hyakka Ryouran when at least 2 of the 3 buff categories are missing!
+            res = 0;
+            if (PickAllyWithoutHojo(0x01) != 0) { res = res + 1; }
+            if (PickAllyWithoutHojo(0x10) != 0) { res = res + 1; }
+            if (PickAllyWithoutHojo(0x04) != 0) { res = res + 1; }
+            if (res >= 2)
             {
-                if ((sIsBoss == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
-                {
-                    AI_ACT_SKILL(293); // Hyakka Ryouran
-                    AI_TAR_RND();
-                    sActionDone = 10;
-                    return;
-                }
+                AI_ACT_SKILL(293); // Hyakka Ryouran
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
             }
-            if (AI_CHK_MYABLESKIL(343) == 1)
+        }
+        if (AI_CHK_MYABLESKIL(343) == 1)
+        {
+            allyId = PickAllyWithoutHojo(0x01);
+            if (allyId == 0) { allyId = PickAllyWithoutHojo(0x10); }
+            if (allyId == 0) { allyId = PickAllyWithoutHojo(0x04); }
+            if (allyId != 0)
             {
                 AI_ACT_SKILL(343); // Thermopylae (only usable when surrounded — AI_CHK_MYABLESKIL enforces!)
                 AI_TAR_RND();
@@ -2240,7 +2362,7 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // 6. Party & Single Stat Buffs (Matarukaja/Tarukaja, Marakukaja/VaultGuardian/Rakukaja, Masukukaja/Gambler/Sukukaja, Heat Riser)
+    // 6. Party & Single Stat Buffs (prefer cheaper 20-SP Ring skills over 24-SP Ma-kaja!)
     // Uses PickAllyWithoutHojo so KO'd allies never cause infinite buff spam & Joker gets priority!
     if ((AI_CHK_MYABLESKIL(340) == 1) || (AI_CHK_MYABLESKIL(335) == 1))
     {
@@ -2249,14 +2371,14 @@ void ACT_Support(int guaranteed)
         {
             if (AI_CHK_MYABLESKIL(340) == 1)
             {
-                AI_ACT_SKILL(340); // Matarukaja
+                AI_ACT_SKILL(340); // Matarukaja (24 SP)
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
             }
-            if (AI_CHK_MYABLESKIL(335) == 1)
+            if ((AI_CHK_MYABLESKIL(335) == 1) && ((sIsBoss == 1) || ((allyId == 1) && (sMySpPct >= 30) && (AI_CHK_ENALLHP(40) == 0))))
             {
-                AI_ACT_SKILL(335); // Tarukaja
+                AI_ACT_SKILL(335); // Tarukaja (8 SP)
                 AI_TAR_UID(AI_GET_UNI(0, allyId));
                 sActionDone = 10;
                 return;
@@ -2264,28 +2386,28 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    if ((AI_CHK_MYABLESKIL(341) == 1) || (AI_CHK_MYABLESKIL(185) == 1) || (AI_CHK_MYABLESKIL(336) == 1))
+    if ((AI_CHK_MYABLESKIL(185) == 1) || (AI_CHK_MYABLESKIL(341) == 1) || (AI_CHK_MYABLESKIL(336) == 1))
     {
         allyId = PickAllyWithoutHojo(0x10);
         if (allyId != 0)
         {
-            if (AI_CHK_MYABLESKIL(341) == 1)
-            {
-                AI_ACT_SKILL(341); // Marakukaja
-                AI_TAR_RND();
-                sActionDone = 10;
-                return;
-            }
             if (AI_CHK_MYABLESKIL(185) == 1)
             {
-                AI_ACT_SKILL(185); // Vault Guardian (Ring of Gluttony)
+                AI_ACT_SKILL(185); // Vault Guardian (20 SP, cheaper than Marakukaja!)
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
             }
-            if (AI_CHK_MYABLESKIL(336) == 1)
+            if (AI_CHK_MYABLESKIL(341) == 1)
             {
-                AI_ACT_SKILL(336); // Rakukaja
+                AI_ACT_SKILL(341); // Marakukaja (24 SP)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if ((AI_CHK_MYABLESKIL(336) == 1) && ((sIsBoss == 1) || ((allyId == 1) && (sMySpPct >= 30) && (AI_CHK_ENALLHP(40) == 0))))
+            {
+                AI_ACT_SKILL(336); // Rakukaja (8 SP)
                 AI_TAR_UID(AI_GET_UNI(0, allyId));
                 sActionDone = 10;
                 return;
@@ -2293,28 +2415,28 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    if ((AI_CHK_MYABLESKIL(342) == 1) || (AI_CHK_MYABLESKIL(188) == 1) || (AI_CHK_MYABLESKIL(337) == 1))
+    if ((AI_CHK_MYABLESKIL(188) == 1) || (AI_CHK_MYABLESKIL(342) == 1) || (AI_CHK_MYABLESKIL(337) == 1))
     {
         allyId = PickAllyWithoutHojo(0x04);
         if (allyId != 0)
         {
-            if (AI_CHK_MYABLESKIL(342) == 1)
-            {
-                AI_ACT_SKILL(342); // Masukukaja
-                AI_TAR_RND();
-                sActionDone = 10;
-                return;
-            }
             if (AI_CHK_MYABLESKIL(188) == 1)
             {
-                AI_ACT_SKILL(188); // Gambler's Foresight (Ring of Envy)
+                AI_ACT_SKILL(188); // Gambler's Foresight (20 SP, cheaper than Masukukaja!)
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
             }
-            if (AI_CHK_MYABLESKIL(337) == 1)
+            if (AI_CHK_MYABLESKIL(342) == 1)
             {
-                AI_ACT_SKILL(337); // Sukukaja
+                AI_ACT_SKILL(342); // Masukukaja (24 SP)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
+            if ((AI_CHK_MYABLESKIL(337) == 1) && ((sIsBoss == 1) || ((allyId == 1) && (sMySpPct >= 30) && (AI_CHK_ENALLHP(40) == 0))))
+            {
+                AI_ACT_SKILL(337); // Sukukaja (8 SP)
                 AI_TAR_UID(AI_GET_UNI(0, allyId));
                 sActionDone = 10;
                 return;
@@ -2322,33 +2444,49 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // Heat Riser (338)
+    // Heat Riser (338, 30 SP) — target Joker or self only on bosses/healthy fights (prevents 120-SP 4-ally spam!)
     if (AI_CHK_MYABLESKIL(338) == 1)
     {
-        allyId = PickAllyWithoutHojo(0x01);
-        if (allyId == 0) { allyId = PickAllyWithoutHojo(0x10); }
-        if (allyId != 0)
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 45)))
         {
-            AI_ACT_SKILL(338);
-            AI_TAR_UID(AI_GET_UNI(0, allyId));
-            sActionDone = 10;
-            return;
-        }
-    }
-
-    // 7. Party Charge/Concentrate under Heal/Support (Fighting Spirit 290, High Energy 294 — 80 SP)
-    if ((guaranteed == 1) && (AI_CHK_MORE() == 0))
-    {
-        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
-        {
-            if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1) && (AI_CHK_FRHOJO(0x0100) == 0))
+            allyId = 0;
+            if ((IsAllyAlive(1) == 1) && ((AI_CHK_FRIDHOJO(1, 0x01) == 0) || (AI_CHK_FRIDHOJO(1, 0x10) == 0)))
             {
-                AI_ACT_SKILL(290); // Fighting Spirit
-                AI_TAR_RND();
+                allyId = 1;
+            }
+            else if ((AI_CHK_NOTMYHOJO(0x01) == 1) || (AI_CHK_NOTMYHOJO(0x10) == 1))
+            {
+                allyId = sMyCharId;
+            }
+            if (allyId != 0)
+            {
+                AI_ACT_SKILL(338);
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
                 sActionDone = 10;
                 return;
             }
-            if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(294) == 1) && (AI_CHK_FRHOJO(0x0200) == 0))
+        }
+    }
+
+    // 7. Party Charge/Concentrate under Heal/Support (Fighting Spirit 290, High Energy 294 — 80 SP, boss-only!)
+    if ((guaranteed == 1) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MORE() == 0))
+    {
+        if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1))
+        {
+            if ((sEnemyCount > 1) || (IsSinglePhysSafe() == 1))
+            {
+                if (CountCapableWithoutHojo(0x0100) >= 2)
+                {
+                    AI_ACT_SKILL(290); // Fighting Spirit
+                    AI_TAR_RND();
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+        if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(294) == 1))
+        {
+            if (CountCapableWithoutHojo(0x0200) >= 2)
             {
                 AI_ACT_SKILL(294); // High Energy
                 AI_TAR_RND();
@@ -2361,62 +2499,87 @@ void ACT_Support(int guaranteed)
     // 8. Critical Rate Buffs: Brave Step (303 -> HOJO 0x1000), Revolution (366 -> 0x2000), Rebellion (365 -> 0x1000)
     if (AI_CHK_MYABLESKIL(303) == 1)
     {
-        allyId = PickAllyWithoutHojo(0x1000);
-        if (allyId != 0)
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 30)))
         {
-            if (PickAllyWithoutHojo(0x2000) != 0)
+            allyId = PickAllyWithoutHojo(0x1000);
+            if (allyId != 0)
             {
-                AI_ACT_SKILL(303); // Brave Step
-                AI_TAR_RND();
-                sActionDone = 10;
-                return;
+                if (PickAllyWithoutHojo(0x2000) != 0)
+                {
+                    AI_ACT_SKILL(303); // Brave Step
+                    AI_TAR_RND();
+                    sActionDone = 10;
+                    return;
+                }
             }
         }
     }
     if (AI_CHK_MYABLESKIL(366) == 1)
     {
-        if (PickAllyWithoutHojo(0x2000) != 0)
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 25)))
         {
-            AI_ACT_SKILL(366); // Revolution
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
-        }
-    }
-    if (AI_CHK_MYABLESKIL(365) == 1)
-    {
-        allyId = PickAllyWithoutHojo(0x1000);
-        if (allyId != 0)
-        {
-            AI_ACT_SKILL(365); // Rebellion
-            AI_TAR_UID(AI_GET_UNI(0, allyId));
-            sActionDone = 10;
-            return;
-        }
-    }
-
-    // 9. Barriers & Shields: Life Wall (296, 95 SP), Bleeding Dry Brush (184), Tetrakarn (370), Makarakarn (371), Tetraja (372)
-    // Skip Karn repel shields (Life Wall / Tetrakarn / Makarakarn) against The Reaper (Enemy ID 190)
-    // so allies never trigger The Reaper's infinite Concentrate -> Megidolaon wipe loop!
-    // (Skill ownership checked FIRST in nested if so non-owners skip all enemy/HOJO COMM calls!)
-    if (AI_CHK_MYABLESKIL(296) == 1)
-    {
-        if ((AI_CHK_ENID(190) == 0) && (AI_CHK_FRHOJO(0xC000) == 0))
-        {
-            if ((sIsBoss == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 60)))
+            if (PickAllyWithoutHojo(0x2000) != 0)
             {
-                AI_ACT_SKILL(296); // Life Wall (Haru 3rd sem)
+                AI_ACT_SKILL(366); // Revolution
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
             }
         }
     }
+    if (AI_CHK_MYABLESKIL(365) == 1)
+    {
+        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 30)))
+        {
+            // Prioritize Physical/Crit attackers (skip pure mage Ann 4)
+            allyId = 0;
+            if (IsAllyCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x1000) == 0)  { allyId = 1; } }
+            if ((allyId == 0) && (sIsBoss == 1))
+            {
+                if (IsAllyCapable(10) == 1) { if (AI_CHK_FRIDHOJO(10, 0x1000) == 0) { allyId = 10; } }
+                if ((allyId == 0) && (IsAllyCapable(2) == 1)) { if (AI_CHK_FRIDHOJO(2, 0x1000) == 0) { allyId = 2; } }
+                if ((allyId == 0) && (IsAllyCapable(5) == 1)) { if (AI_CHK_FRIDHOJO(5, 0x1000) == 0) { allyId = 5; } }
+                if ((allyId == 0) && (IsAllyCapable(3) == 1)) { if (AI_CHK_FRIDHOJO(3, 0x1000) == 0) { allyId = 3; } }
+                if ((allyId == 0) && (IsAllyCapable(9) == 1)) { if (AI_CHK_FRIDHOJO(9, 0x1000) == 0) { allyId = 9; } }
+                if ((allyId == 0) && (IsAllyCapable(7) == 1)) { if (AI_CHK_FRIDHOJO(7, 0x1000) == 0) { allyId = 7; } }
+            }
+            if (allyId != 0)
+            {
+                AI_ACT_SKILL(365); // Rebellion
+                AI_TAR_UID(AI_GET_UNI(0, allyId));
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    // 9. Barriers & Shields: Life Wall (296, 95 SP), Bleeding Dry Brush (184, 22 SP), Tetrakarn (370, 24 SP), Makarakarn (371, 24 SP), Tetraja (372, 24 SP)
+    // Skip Karn repel shields (Life Wall / Tetrakarn / Makarakarn) against The Reaper (Enemy ID 190)
+    // so allies never trigger The Reaper's infinite Concentrate -> Megidolaon wipe loop!
+    if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(296) == 1))
+    {
+        if ((AI_CHK_ENID(190) == 0) && (AI_CHK_FRHOJO(0xC000) == 0))
+        {
+            AI_ACT_SKILL(296); // Life Wall (Haru 3rd sem, boss-only!)
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
     if (AI_CHK_MYABLESKIL(184) == 1)
     {
-        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 35)))
+        if (((sIsBoss == 1) && (sMySpPct >= 30)) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
         {
-            allyId = PickDrainBarrierAlly();
+            // Shield Joker first; only shield additional allies on bosses under Heal/Support with >= 50% SP
+            allyId = 0;
+            if ((IsAllyAlive(1) == 1) && (AI_CHK_FRIDHOJO2(1, 2) == 0))
+            {
+                allyId = 1;
+            }
+            else if ((sIsBoss == 1) && (guaranteed == 1) && (sMySpPct >= 50))
+            {
+                allyId = PickDrainBarrierAlly();
+            }
             if (allyId != 0)
             {
                 AI_ACT_SKILL(184); // Bleeding Dry Brush (Ring of Vanity)
@@ -2428,11 +2591,19 @@ void ACT_Support(int guaranteed)
     }
     if ((AI_CHK_MYABLESKIL(370) == 1) || (AI_CHK_MYABLESKIL(371) == 1))
     {
-        if ((AI_CHK_ENID(190) == 0) && ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 40))))
+        if ((AI_CHK_ENID(190) == 0) && (((sIsBoss == 1) && (sMySpPct >= 35)) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50))))
         {
             if (AI_CHK_MYABLESKIL(370) == 1)
             {
-                allyId = PickAllyWithoutHojo(0x4000);
+                allyId = 0;
+                if ((IsAllyAlive(1) == 1) && (AI_CHK_FRIDHOJO(1, 0x4000) == 0))
+                {
+                    allyId = 1;
+                }
+                else if ((sIsBoss == 1) && (guaranteed == 1) && (sMySpPct >= 50))
+                {
+                    allyId = PickAllyWithoutHojo(0x4000);
+                }
                 if (allyId != 0)
                 {
                     AI_ACT_SKILL(370); // Tetrakarn
@@ -2443,7 +2614,15 @@ void ACT_Support(int guaranteed)
             }
             if (AI_CHK_MYABLESKIL(371) == 1)
             {
-                allyId = PickAllyWithoutHojo(0x8000);
+                allyId = 0;
+                if ((IsAllyAlive(1) == 1) && (AI_CHK_FRIDHOJO(1, 0x8000) == 0))
+                {
+                    allyId = 1;
+                }
+                else if ((sIsBoss == 1) && (guaranteed == 1) && (sMySpPct >= 50))
+                {
+                    allyId = PickAllyWithoutHojo(0x8000);
+                }
                 if (allyId != 0)
                 {
                     AI_ACT_SKILL(371); // Makarakarn
@@ -2456,81 +2635,87 @@ void ACT_Support(int guaranteed)
     }
     if (AI_CHK_MYABLESKIL(372) == 1)
     {
-        if (PickAllyWithoutHojo(0x02000000) != 0)
+        if (((sIsBoss == 1) && ((guaranteed == 1) || (sMySpPct >= 25))) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 45)))
         {
-            AI_ACT_SKILL(372); // Tetraja
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if (PickAllyWithoutHojo(0x02000000) != 0)
+            {
+                AI_ACT_SKILL(372); // Tetraja
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
     // 10. Elemental Breaks when enemies resist/null/repel/absorb that element
     // Verified directly from SKILL.TBL: Fire=0x01, Ice=0x02, Wind(387)=0x04, Elec(388)=0x08, Nuke(395)=0x10, Psy(396)=0x20 (<< 16)
-    // Nested AI_CHK_MYABLESKIL avoids 30 wasted IsAttrImpeded/NOTENHOJO COMM calls when character lacks Break skills!
-    if (AI_CHK_MYABLESKIL(385) == 1)
+    // Only cast on bosses or healthy solo targets so turns aren't wasted on dying trash mobs!
+    if ((sIsBoss == 1) || ((sEnemyCount == 1) && (AI_CHK_ENALLHP(50) == 0)))
     {
-        if ((AI_CHK_NOTENHOJO(0x00010000) == 1) && (IsAttrImpeded(2) == 1))
+        if (AI_CHK_MYABLESKIL(385) == 1)
         {
-            AI_ACT_SKILL(385); // Fire Break
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_NOTENHOJO(0x00010000) == 1) && (IsAttrImpeded(2) == 1))
+            {
+                AI_ACT_SKILL(385); // Fire Break
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
-    }
-    if (AI_CHK_MYABLESKIL(386) == 1)
-    {
-        if ((AI_CHK_NOTENHOJO(0x00020000) == 1) && (IsAttrImpeded(3) == 1))
+        if (AI_CHK_MYABLESKIL(386) == 1)
         {
-            AI_ACT_SKILL(386); // Ice Break
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_NOTENHOJO(0x00020000) == 1) && (IsAttrImpeded(3) == 1))
+            {
+                AI_ACT_SKILL(386); // Ice Break
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
-    }
-    if (AI_CHK_MYABLESKIL(388) == 1)
-    {
-        if ((AI_CHK_NOTENHOJO(0x00080000) == 1) && (IsAttrImpeded(4) == 1))
+        if (AI_CHK_MYABLESKIL(388) == 1)
         {
-            AI_ACT_SKILL(388); // Elec Break (SKILL.TBL bit 0x00080000!)
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_NOTENHOJO(0x00080000) == 1) && (IsAttrImpeded(4) == 1))
+            {
+                AI_ACT_SKILL(388); // Elec Break (SKILL.TBL bit 0x00080000!)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
-    }
-    if (AI_CHK_MYABLESKIL(387) == 1)
-    {
-        if ((AI_CHK_NOTENHOJO(0x00040000) == 1) && (IsAttrImpeded(5) == 1))
+        if (AI_CHK_MYABLESKIL(387) == 1)
         {
-            AI_ACT_SKILL(387); // Wind Break (SKILL.TBL bit 0x00040000!)
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_NOTENHOJO(0x00040000) == 1) && (IsAttrImpeded(5) == 1))
+            {
+                AI_ACT_SKILL(387); // Wind Break (SKILL.TBL bit 0x00040000!)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
-    }
-    if (AI_CHK_MYABLESKIL(396) == 1)
-    {
-        if ((AI_CHK_NOTENHOJO(0x00200000) == 1) && (IsAttrImpeded(6) == 1))
+        if (AI_CHK_MYABLESKIL(396) == 1)
         {
-            AI_ACT_SKILL(396); // Psy Break
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_NOTENHOJO(0x00200000) == 1) && (IsAttrImpeded(6) == 1))
+            {
+                AI_ACT_SKILL(396); // Psy Break
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
-    }
-    if (AI_CHK_MYABLESKIL(395) == 1)
-    {
-        if ((AI_CHK_NOTENHOJO(0x00100000) == 1) && (IsAttrImpeded(7) == 1))
+        if (AI_CHK_MYABLESKIL(395) == 1)
         {
-            AI_ACT_SKILL(395); // Nuke Break
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((AI_CHK_NOTENHOJO(0x00100000) == 1) && (IsAttrImpeded(7) == 1))
+            {
+                AI_ACT_SKILL(395); // Nuke Break
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
-    // 11. Will Seed Ring Charge/Concentrate gifts (only when foes are still healthy!)
-    if ((sIsBoss == 1) || (AI_CHK_ENALLHP(35) == 0))
+    // 11. Will Seed Ring Charge/Concentrate gifts (only on bosses or healthy fights with spare SP!)
+    if (((sIsBoss == 1) && (AI_CHK_ENALLHP(15) == 0)) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 30)))
     {
         if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(187) == 1))
         {
@@ -2543,7 +2728,7 @@ void ACT_Support(int guaranteed)
                 return;
             }
         }
-        if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(189) == 1))
+        if ((sNotPhysical == 0) && (sLockMode != 1) && ((sEnemyCount > 1) || (IsSinglePhysSafe() == 1)) && (AI_CHK_MYABLESKIL(189) == 1))
         {
             allyId = PickChargeAlly();
             if (allyId != 0)
@@ -2556,8 +2741,8 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // 12. Remaining Debilitate partial debuff (even if only 1 of 3 stats missing)
-    if (AI_CHK_MYABLESKIL(348) == 1)
+    // 12. Remaining Debilitate partial debuff (bosses only so 30 SP isn't burned on 1 missing stat in trash fights)
+    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(348) == 1))
     {
         if (AI_CHK_NOTENHOJO(0x20) == 1)
         {
@@ -2603,36 +2788,39 @@ void ACT_SupportRefresh()
     int pick;
     int idx;
     int chosen;
+    int jokerUid;
 
     if (sLockMode == 3)
     {
         return;
     }
 
-    // Only proactively refresh timers on bosses, or on healthy fights with spare SP (prevents trash-mob SP drain!)
+    // Refresh buff/debuff timers probabilistically so Heal/Support keeps timers topped off
+    // without infinitely burning 100% of SP every single turn! (Excludes 90-SP 3rd-sem skills.)
     if (sIsBoss == 0)
     {
-        if ((AI_CHK_ENALLHP(35) == 1) || (sMySpPct < 35) || (RND(100) >= 50))
+        if ((AI_CHK_ENALLHP(40) == 1) || (sMySpPct < 40) || (RND(100) >= 35))
         {
             return;
         }
     }
-    else if (sMySpPct < 20)
+    else
     {
-        return;
+        if ((sMySpPct < 30) || (RND(100) >= 35))
+        {
+            return;
+        }
     }
 
-    // Pass 1: count usable refreshable buff/debuff skills (90-SP 3rd-sem skills only refreshed on bosses)
+    // Pass 1: count usable refreshable buff/debuff skills (excludes 90-SP Checkmate/Hyakka Ryouran!)
     numAvail = 0;
-    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(292) == 1)) { numAvail = numAvail + 1; } // Checkmate
-    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(293) == 1)) { numAvail = numAvail + 1; } // Hyakka Ryouran
     if (AI_CHK_MYABLESKIL(348) == 1) { numAvail = numAvail + 1; } // Debilitate
     if (AI_CHK_MYABLESKIL(338) == 1) { numAvail = numAvail + 1; } // Heat Riser
     if (AI_CHK_MYABLESKIL(340) == 1) { numAvail = numAvail + 1; } // Matarukaja
-    if (AI_CHK_MYABLESKIL(341) == 1) { numAvail = numAvail + 1; } // Marakukaja
-    if (AI_CHK_MYABLESKIL(342) == 1) { numAvail = numAvail + 1; } // Masukukaja
     if (AI_CHK_MYABLESKIL(185) == 1) { numAvail = numAvail + 1; } // Vault Guardian
+    if (AI_CHK_MYABLESKIL(341) == 1) { numAvail = numAvail + 1; } // Marakukaja
     if (AI_CHK_MYABLESKIL(188) == 1) { numAvail = numAvail + 1; } // Gambler's Foresight
+    if (AI_CHK_MYABLESKIL(342) == 1) { numAvail = numAvail + 1; } // Masukukaja
     if (AI_CHK_MYABLESKIL(350) == 1) { numAvail = numAvail + 1; } // Matarunda
     if (AI_CHK_MYABLESKIL(351) == 1) { numAvail = numAvail + 1; } // Marakunda
     if (AI_CHK_MYABLESKIL(352) == 1) { numAvail = numAvail + 1; } // Masukunda
@@ -2665,15 +2853,13 @@ void ACT_SupportRefresh()
     // Pass 2: select the `pick`-th eligible skill cleanly
     idx = 0;
     chosen = 0;
-    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(292) == 1)) { if (idx == pick) { chosen = 292; } idx = idx + 1; }
-    if ((sIsBoss == 1) && (AI_CHK_MYABLESKIL(293) == 1)) { if (idx == pick) { chosen = 293; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(348) == 1) { if (idx == pick) { chosen = 348; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(338) == 1) { if (idx == pick) { chosen = 338; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(340) == 1) { if (idx == pick) { chosen = 340; } idx = idx + 1; }
-    if (AI_CHK_MYABLESKIL(341) == 1) { if (idx == pick) { chosen = 341; } idx = idx + 1; }
-    if (AI_CHK_MYABLESKIL(342) == 1) { if (idx == pick) { chosen = 342; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(185) == 1) { if (idx == pick) { chosen = 185; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(341) == 1) { if (idx == pick) { chosen = 341; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(188) == 1) { if (idx == pick) { chosen = 188; } idx = idx + 1; }
+    if (AI_CHK_MYABLESKIL(342) == 1) { if (idx == pick) { chosen = 342; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(350) == 1) { if (idx == pick) { chosen = 350; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(351) == 1) { if (idx == pick) { chosen = 351; } idx = idx + 1; }
     if (AI_CHK_MYABLESKIL(352) == 1) { if (idx == pick) { chosen = 352; } idx = idx + 1; }
@@ -2688,10 +2874,23 @@ void ACT_SupportRefresh()
     if (chosen > 0)
     {
         AI_ACT_SKILL(chosen);
-        // Single-target debuffs refresh the highest-HP enemy (boss); others target party/random
+        // Single-target debuffs refresh the highest-HP enemy (boss);
+        // single-target ally buffs refresh Joker (1) first; party AoE targets random!
         if ((chosen == 348) || (chosen == 345) || (chosen == 346) || (chosen == 347))
         {
             AI_TAR_HPMAX();
+        }
+        else if ((chosen == 338) || (chosen == 335) || (chosen == 336) || (chosen == 337))
+        {
+            jokerUid = AI_GET_UNI(0, 1);
+            if ((IsAllyAlive(1) == 1) && (jokerUid != -1))
+            {
+                AI_TAR_UID(jokerUid);
+            }
+            else
+            {
+                AI_TAR_RND();
+            }
         }
         else
         {
@@ -2709,6 +2908,12 @@ void ACT_Ailment(int forced)
     int res;
 
     if (sLockMode == 2)
+    {
+        return;
+    }
+
+    // Don't waste SP casting ailments on nearly-dead trash mobs or when low on SP (unless scripted!)
+    if ((forced == 0) && ((AI_CHK_ENALLHP(30) == 1) || (sMySpPct < 20)))
     {
         return;
     }
@@ -2766,8 +2971,10 @@ void ACT_Fixed()
 
 // ============================================================================
 // Helper: Try Signature 3rd-Semester / High-Impact Physical Skills
+//   minHeavyHp: minimum HP% required for 25%-HP colossal skills (Masquerade/Laevateinn)
+//   preferHighHp: 1 when Charged or bossing (hit Phys-weak or highest-HP foe instead of weak add!)
 // ============================================================================
-void TrySignaturePhysSkills(int allowAoE)
+void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
 {
     int uid;
 
@@ -2776,10 +2983,25 @@ void TrySignaturePhysSkills(int allowAoE)
         return;
     }
 
-    // Sumire: Masquerade (298) — Severe Phys 2x to 1 foe (25% HP cost -> require > 30% HP!)
-    if ((sMyHpPct > 30) && (AI_CHK_MYABLESKIL(298) == 1))
+    // Sumire: Masquerade (298) — Severe Phys 2x to 1 foe (25% HP cost)
+    if ((sMyHpPct > minHeavyHp) && (AI_CHK_MYABLESKIL(298) == 1))
     {
-        uid = AI_GET_UNINOMALHPMIN(0);
+        uid = AI_GET_UNIWEAK(0);
+        if ((uid != -1) && (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 0))
+        {
+            uid = -1;
+        }
+        if (uid == -1)
+        {
+            if (preferHighHp == 1)
+            {
+                uid = AI_GET_UNINOMALLVMAXHPMAX(0);
+            }
+            if (uid == -1)
+            {
+                uid = AI_GET_UNINOMALHPMIN(0);
+            }
+        }
         if (uid != -1)
         {
             AI_ACT_SKILL(298);
@@ -2789,10 +3011,25 @@ void TrySignaturePhysSkills(int allowAoE)
         }
     }
 
-    // Akechi: Laevateinn (279) — Colossal Phys to 1 foe (25% HP cost -> require > 30% HP!)
-    if ((sMyHpPct > 30) && (AI_CHK_MYABLESKIL(279) == 1))
+    // Akechi: Laevateinn (279) — Colossal Phys to 1 foe (25% HP cost)
+    if ((sMyHpPct > minHeavyHp) && (AI_CHK_MYABLESKIL(279) == 1))
     {
-        uid = AI_GET_UNINOMALHPMIN(0);
+        uid = AI_GET_UNIWEAK(0);
+        if ((uid != -1) && (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 0))
+        {
+            uid = -1;
+        }
+        if (uid == -1)
+        {
+            if (preferHighHp == 1)
+            {
+                uid = AI_GET_UNINOMALLVMAXHPMAX(0);
+            }
+            if (uid == -1)
+            {
+                uid = AI_GET_UNINOMALHPMIN(0);
+            }
+        }
         if (uid != -1)
         {
             AI_ACT_SKILL(279);
@@ -2802,10 +3039,10 @@ void TrySignaturePhysSkills(int allowAoE)
         }
     }
 
-    // Morgana: Miracle Rush (291) — AoE Med Phys high crit
-    if ((allowAoE == 1) && (AI_CHK_MYABLESKIL(291) == 1))
+    // Morgana: Miracle Rush (291) — AoE Med Phys high crit (16% HP cost -> require > 25% HP!)
+    if ((allowAoE == 1) && (sMyHpPct > 25) && (AI_CHK_MYABLESKIL(291) == 1))
     {
-        if (IsAoESafeForAttr(0) == 1)
+        if ((IsAoESafeForAttr(0) == 1) || ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1)))
         {
             AI_ACT_SKILL(291);
             AI_TAR_RND();
@@ -2824,6 +3061,7 @@ void ACT_BestOffense(int aggressive)
 {
     int hpMin;
     int spMin;
+    int heavyHpMin;
     int attr;
     int uid;
     int singleOnly;
@@ -2834,18 +3072,20 @@ void ACT_BestOffense(int aggressive)
     if (aggressive == 1)
     {
         hpMin = 25;
+        heavyHpMin = 35;
         spMin = 0;
     }
     else
     {
         hpMin = 35;
+        heavyHpMin = 40;
         spMin = 15;
     }
 
     // 1. If Charged (0x0100): immediately cash in with strongest Physical skill!
-    if ((AI_CHK_MYHOJO(0x0100) == 1) && (sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > 20))
+    if ((AI_CHK_MYHOJO(0x0100) == 1) && (sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > 25))
     {
-        TrySignaturePhysSkills(1);
+        TrySignaturePhysSkills(1, 35, 1);
         if (sActionDone != 0) { return; }
 
         if (IsAoESafeForAttr(0) == 1)
@@ -2863,13 +3103,23 @@ void ACT_BestOffense(int aggressive)
             sActionDone = 10;
             return;
         }
+        // Fallback for AoE-only Physical builds (e.g. Gigantomachia-only Ryuji) against a 1-enemy boss!
+        if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1))
+        {
+            res = AI_ACT_HIGHSKILL(2);
+            if ((res != -1) && (res != 0))
+            {
+                sActionDone = 10;
+                return;
+            }
+        }
     }
 
     // 2. If Concentrated (0x0200): immediately cash in with strongest Magic/Almighty skill!
     if ((AI_CHK_MYHOJO(0x0200) == 1) && (sLockMode != 2))
     {
-        // Akechi Rebellion Blade (297)
-        if (AI_CHK_MYABLESKIL(297) == 1)
+        // Akechi Rebellion Blade (297, 99 SP!): only on bosses or healthy foes in Full Assault!
+        if ((AI_CHK_MYABLESKIL(297) == 1) && ((sIsBoss == 1) || ((aggressive == 1) && (sMySpPct >= 35) && (AI_CHK_ENALLHP(40) == 0))))
         {
             AI_ACT_SKILL(297);
             if (AI_CHK_ENBAD(0x00100000) == 1)
@@ -2898,6 +3148,16 @@ void ACT_BestOffense(int aggressive)
         {
             sActionDone = 10;
             return;
+        }
+        // Fallback for AoE-only Magic builds (e.g. Blazing Hell-only Ann) against a 1-enemy boss!
+        if (sEnemyCount == 1)
+        {
+            res = AI_ACT_HIGHSKILL(1);
+            if ((res != -1) && (res != 0))
+            {
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
@@ -2948,9 +3208,10 @@ void ACT_BestOffense(int aggressive)
     }
 
     // 4. 3rd-Semester signature Physical skills (Masquerade / Laevateinn / Miracle Rush)
-    if (sMyHpPct > hpMin)
+    // Skip burning 25%-HP colossal skills on dying normal trash mobs (<= 25% HP)
+    if ((sMyHpPct > hpMin) && ((sIsBoss == 1) || (aggressive == 1) || (AI_CHK_ENALLHP(25) == 0)))
     {
-        TrySignaturePhysSkills(1);
+        TrySignaturePhysSkills(1, heavyHpMin, sIsBoss);
         if (sActionDone != 0) { return; }
     }
 
@@ -2997,10 +3258,27 @@ void ACT_BestOffense(int aggressive)
         res = AI_ACT_HIGHSKILL(3); // Single Magic
         if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
     }
+
+    // Single-enemy AoE fallback for late-game AoE-only builds (e.g. Blazing Hell / Gigantomachia only!)
+    if (sEnemyCount == 1)
+    {
+        if ((sNotPhysical == 0) && (sLockMode != 1) && (sMyHpPct > hpMin) && (IsSinglePhysSafe() == 1))
+        {
+            res = AI_ACT_HIGHSKILL(2); // AoE Phys fallback on 1 foe
+            if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+        }
+        if ((sLockMode != 2) && (sMySpPct > spMin))
+        {
+            res = AI_ACT_HIGHSKILL(1); // AoE Magic fallback on 1 foe
+            if ((res != -1) && (res != 0)) { sActionDone = 10; return; }
+        }
+    }
 }
 
 // ============================================================================
 // Action: Zero-SP HP-Cost Physical & Gun Skills (Conserve SP Rewrite!)
+//   Balanced HP cutoff (> 55%, > 60% for 25%-HP skills) so Conserve SP never
+//   drains HP down into emergency SP healing territory!
 // ============================================================================
 void ACT_PhysZeroSP()
 {
@@ -3009,7 +3287,29 @@ void ACT_PhysZeroSP()
     int singleOnly;
     int res;
 
-    if ((sLockMode == 1) || (sMyHpPct <= 45))
+    if (sLockMode == 1)
+    {
+        return;
+    }
+
+    // Even below 55% HP, grab a free non-Shocked melee Phys-weak 1-More first!
+    if ((sNotPhysical == 0) && (sNo1MoreFlag == 0) && (sDownCount < sEnemyCount) && (AI_CHK_MYHOJO(0x0100) == 0))
+    {
+        res = AI_GET_MYATTRATTACK();
+        uid = AI_GET_UNIWEAK_ST(res);
+        if (uid != -1)
+        {
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, res) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+            {
+                AI_ACT_ATTACK();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
+        }
+    }
+
+    if (sMyHpPct <= 55)
     {
         return;
     }
@@ -3056,8 +3356,14 @@ void ACT_PhysZeroSP()
         }
     }
 
-    // 3. Signature 3rd-sem Phys skills (Masquerade, Laevateinn, Miracle Rush)
-    TrySignaturePhysSkills(1);
+    // Don't spend HP on non-weakness Physical skills when all normal foes are nearly dead (<= 25% HP)
+    if ((sIsBoss == 0) && (AI_CHK_ENALLHP(25) == 1))
+    {
+        return;
+    }
+
+    // 3. Signature 3rd-sem Phys skills (require > 60% HP for 25%-HP Masquerade/Laevateinn in Conserve SP!)
+    TrySignaturePhysSkills(1, 60, sIsBoss);
     if (sActionDone != 0)
     {
         return;
@@ -3074,11 +3380,21 @@ void ACT_PhysZeroSP()
         }
     }
 
-    // 5. Single-target Phys skill
+    // 5. Single-target Phys skill (with single-enemy AoE fallback for AoE-only builds!)
     res = AI_ACT_HIGHSKILL(4);
     if ((res != -1) && (res != 0))
     {
         sActionDone = 10;
+        return;
+    }
+
+    if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1))
+    {
+        res = AI_ACT_HIGHSKILL(2);
+        if ((res != -1) && (res != 0))
+        {
+            sActionDone = 10;
+        }
     }
 }
 
