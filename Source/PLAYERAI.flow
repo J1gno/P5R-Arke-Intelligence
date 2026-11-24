@@ -255,8 +255,8 @@ int IsAoESafeForAttr(int attr)
     return 1;
 }
 
-// Returns 1 if Haru's AoE Grenade Launcher can safely fire
-int IsHaruGunSafe()
+// Returns 1 if AoE/spread Gun attacks (Ann's SMG & Haru's Grenade Launcher) can safely fire
+int IsAoEGunSafe()
 {
     if (sIsUnstable == 1)
     {
@@ -596,8 +596,12 @@ void AI_pattern_SaveHP()
     if (sActionDone != 0) { return; }
 
     // Full buff/debuff/shield/3rd-sem/Will Seed Ring priority
-    ACT_Support(1);
-    if (sActionDone != 0) { return; }
+    // Guard trash fights so Heal/Support doesn't burn 24-SP Ma-kaja/Ma-kunda at low SP or on dying mobs!
+    if ((sIsBoss == 1) || ((sMySpPct >= 20) && (AI_CHK_ENALLHP(30) == 0)))
+    {
+        ACT_Support(1);
+        if (sActionDone != 0) { return; }
+    }
 
     // If everyone is healthy & buffed, contribute via Showtime / 1-More + Baton Pass
     ACT_Showtime(0);
@@ -642,6 +646,13 @@ void ACT_EndBattle_ATK()
     {
         myAttr = AI_GET_MYATTRATTACK();
         uid = AI_GET_UNIWEAKHPMIN(myAttr);
+        if (uid != -1)
+        {
+            if (AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 0)
+            {
+                uid = -1;
+            }
+        }
         if (uid == -1)
         {
             uid = AI_GET_UNINOMALHPMIN(myAttr);
@@ -953,17 +964,23 @@ void ACT_Heal(int proactive)
         }
         if (AI_CHK_MYABLESKIL(307) == 1)
         {
-            AI_ACT_SKILL(307); // Mediarahan
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((sIsBoss == 1) || (bestPct <= 60) || (hurtCount >= 3))
+            {
+                AI_ACT_SKILL(307); // Mediarahan (avoid burning 30 SP on minor 2-ally chip damage in trash fights)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
         if ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
         {
-            AI_ACT_SKILL(318); // Salvation
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((sIsBoss == 1) || (bestPct <= 55) || (hurtCount >= 3))
+            {
+                AI_ACT_SKILL(318); // Salvation (avoid burning 48 SP on minor chip damage in trash fights)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
         if (AI_CHK_MYABLESKIL(305) == 1)
         {
@@ -1049,17 +1066,23 @@ void ACT_Heal(int proactive)
         }
         if (AI_CHK_MYABLESKIL(307) == 1)
         {
-            AI_ACT_SKILL(307); // Mediarahan
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((sIsBoss == 1) || (bestPct <= 55))
+            {
+                AI_ACT_SKILL(307); // Mediarahan (don't spend 30 SP on 1 ally's minor chip damage in trash fights)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
         if ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
         {
-            AI_ACT_SKILL(318); // Salvation
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            if ((sIsBoss == 1) || (bestPct <= 50))
+            {
+                AI_ACT_SKILL(318); // Salvation (don't spend 48 SP on 1 ally's minor chip damage in trash fights)
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
         if (AI_CHK_MYABLESKIL(305) == 1)
         {
@@ -1626,14 +1649,14 @@ void ACT_1MoreWeakness(int aggressive)
         {
             if (AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1)
             {
-                if (sMyCharId != 7)
+                if ((sMyCharId != 4) && (sMyCharId != 7))
                 {
                     AI_ACT_GUN();
                     AI_TAR_UID(uid);
                     sActionDone = 10;
                     return;
                 }
-                else if (IsHaruGunSafe() == 1)
+                else if (IsAoEGunSafe() == 1)
                 {
                     AI_ACT_GUN();
                     AI_TAR_UID(uid);
@@ -1676,8 +1699,8 @@ void ACT_1MoreWeakness(int aggressive)
         {
             skipAttr = 1;
         }
-        // Respect HP safety for HP-cost Phys (0) & Gun (1) skills
-        if (((attr == 0) || (attr == 1)) && (sMyHpPct <= 30) && (aggressive == 0))
+        // Respect HP safety for HP-cost Phys (0) & Gun (1) skills (even in Full Assault so 25%-HP skills never leave 1 HP!)
+        if (((attr == 0) || (attr == 1)) && (sMyHpPct <= 30))
         {
             skipAttr = 1;
         }
@@ -2000,10 +2023,10 @@ void ACT_Technical()
     int res;
 
     // Akechi's 3rd-semester Rebellion Blade (297, 99 SP!): colossal Almighty bonus on Downed foes!
-    // Only spend 99 SP on bosses, or on healthy foes in Full Assault with spare SP (never on dying trash mobs!)
+    // On bosses, fire if Concentrated, Full Assault, or SP >= 30%; on non-bosses, Full Assault on healthy foes only
     if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(297) == 1) && (AI_CHK_ENBAD(0x00100000) == 1))
     {
-        if ((sIsBoss == 1) || ((sOrder == 1) && (sMySpPct >= 35) && (AI_CHK_ENALLHP(40) == 0)))
+        if (((sIsBoss == 1) && ((AI_CHK_MYHOJO(0x0200) == 1) || (sOrder == 1) || (sMySpPct >= 30))) || ((sOrder == 1) && (sMySpPct >= 35) && (AI_CHK_ENALLHP(40) == 0)))
         {
             AI_ACT_SKILL(297);
             AI_TAR_BAD(0x00100000);
@@ -2013,6 +2036,13 @@ void ACT_Technical()
     }
 
     if ((sLockMode == 1) || (sLockMode == 2))
+    {
+        return;
+    }
+
+    // Never let engine AI_ACT_TECHNICAL() preempt a 2.5x Charged/Concentrated ACT_BestOffense() nuke
+    // (on Sleep/Dizzy foes, ACT_BestOffense()'s strongest nuke will still trigger Technical!)
+    if (AI_CHK_MYHOJO(0x0300) == 1)
     {
         return;
     }
@@ -2036,10 +2066,10 @@ void ACT_KillEnemy_Gun()
         return;
     }
 
-    // Haru's Grenade Launcher is AoE — verify safety against Disaster Shadows & Gun immunity
-    if (sMyCharId == 7)
+    // Ann's SMG sprays random foes & Haru's Grenade Launcher is AoE — verify safety against Disaster Shadows & Gun immunity
+    if ((sMyCharId == 4) || (sMyCharId == 7))
     {
-        if (IsHaruGunSafe() == 0)
+        if (IsAoEGunSafe() == 0)
         {
             return;
         }
@@ -2080,9 +2110,9 @@ void ACT_GunWeakOrKill()
         return;
     }
 
-    if (sMyCharId == 7)
+    if ((sMyCharId == 4) || (sMyCharId == 7))
     {
-        if (IsHaruGunSafe() == 0)
+        if (IsAoEGunSafe() == 0)
         {
             return;
         }
@@ -2114,10 +2144,10 @@ void ACT_GunSmart()
         return;
     }
 
-    // Haru's AoE Grenade Launcher needs AoE safety
-    if (sMyCharId == 7)
+    // Ann's SMG & Haru's Grenade Launcher both hit multiple enemies and need AoE gun safety
+    if ((sMyCharId == 4) || (sMyCharId == 7))
     {
-        if (IsHaruGunSafe() == 0)
+        if (IsAoEGunSafe() == 0)
         {
             return;
         }
@@ -2189,6 +2219,12 @@ void ACT_GunSmart()
 void ACT_UrgentDispel()
 {
     if (sLockMode == 3)
+    {
+        return;
+    }
+
+    // Always dispel on bosses; in trash fights, skip spending SP when foes are nearly dead or SP is very low
+    if ((sIsBoss == 0) && ((AI_CHK_ENALLHP(25) == 1) || (sMySpPct < 15)))
     {
         return;
     }
@@ -2626,9 +2662,10 @@ void ACT_Support(int guaranteed)
             }
         }
     }
-    if (AI_CHK_MYABLESKIL(366) == 1)
+    // Revolution (366) boosts crit rate for BOTH allies AND enemies (SKILL.TBL validTargets=0x03) — NEVER cast on bosses!
+    if ((sIsBoss == 0) && (AI_CHK_MYABLESKIL(366) == 1))
     {
-        if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 25)))
+        if ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 25))
         {
             if (PickAllyWithoutHojo(0x2000) != 0)
             {
@@ -2879,8 +2916,8 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // Engine debuff fallback
-    if (guaranteed == 1)
+    // Engine debuff fallback (bosses only, and skip when Checkmate 292 is available so engine doesn't bypass its 90-SP guard!)
+    if ((guaranteed == 1) && (sIsBoss == 1) && (AI_CHK_MYABLESKIL(292) == 0))
     {
         res = AI_ACT_DEBUFF(0);
         if (res != -1)
@@ -3530,14 +3567,33 @@ void ACT_PhysZeroSP()
     int skill;
     int singleOnly;
     int res;
+    int isCharged;
+    int hpMin;
+    int heavyHpMin;
+    int preferHigh;
 
     if (sLockMode == 1)
     {
         return;
     }
 
-    // Even below 55% HP, grab a free non-Shocked melee Phys-weak 1-More first!
-    if ((sNotPhysical == 0) && (sNo1MoreFlag == 0) && (sDownCount < sEnemyCount) && (AI_CHK_MYHOJO(0x0100) == 0))
+    isCharged = AI_CHK_MYHOJO(0x0100);
+    if (isCharged == 1)
+    {
+        // Match PickChargeAlly()'s > 35% HP floor so Charged Conserve SP allies cash in 2.5x skills instead of wasting Charge on melee!
+        hpMin = 35;
+        heavyHpMin = 40;
+        preferHigh = 1;
+    }
+    else
+    {
+        hpMin = 55;
+        heavyHpMin = 60;
+        preferHigh = sIsBoss;
+    }
+
+    // Even below hpMin, grab a free non-Shocked melee Phys-weak 1-More first (unless Charged!)
+    if ((sNotPhysical == 0) && (sNo1MoreFlag == 0) && (sDownCount < sEnemyCount) && (isCharged == 0))
     {
         res = AI_GET_MYATTRATTACK();
         uid = AI_GET_UNIWEAK_ST(res);
@@ -3553,7 +3609,7 @@ void ACT_PhysZeroSP()
         }
     }
 
-    if (sMyHpPct <= 55)
+    if (sMyHpPct <= hpMin)
     {
         return;
     }
@@ -3579,9 +3635,9 @@ void ACT_PhysZeroSP()
     // Physical skills blocked when enemies are flying (e.g. Cognitive Wakaba) — still allow HP-cost Gun skills!
     if (sNotPhysical == 1)
     {
-        if ((sIsBoss == 1) || (AI_CHK_ENALLHP(25) == 0))
+        if ((isCharged == 1) || (sIsBoss == 1) || (AI_CHK_ENALLHP(25) == 0))
         {
-            TryGunSkills(55, 60, sIsBoss);
+            TryGunSkills(hpMin, heavyHpMin, preferHigh);
         }
         return;
     }
@@ -3604,14 +3660,14 @@ void ACT_PhysZeroSP()
         }
     }
 
-    // Don't spend HP on non-weakness Physical/Gun skills when all normal foes are nearly dead (<= 25% HP)
-    if ((sIsBoss == 0) && (AI_CHK_ENALLHP(25) == 1))
+    // Don't spend HP on non-weakness Physical/Gun skills when all normal foes are nearly dead (unless Charged!)
+    if ((isCharged == 0) && (sIsBoss == 0) && (AI_CHK_ENALLHP(25) == 1))
     {
         return;
     }
 
-    // 3. Signature 3rd-sem Phys skills (require > 60% HP for 25%-HP Masquerade/Laevateinn in Conserve SP!)
-    TrySignaturePhysSkills(1, 60, sIsBoss);
+    // 3. Signature 3rd-sem Phys skills
+    TrySignaturePhysSkills(1, heavyHpMin, preferHigh);
     if (sActionDone != 0)
     {
         return;
@@ -3647,7 +3703,7 @@ void ACT_PhysZeroSP()
     }
 
     // 6. HP-cost Gun skills fallback (e.g. Haru's Riot Gun / One-shot Kill / Triple Down when Phys is blocked!)
-    TryGunSkills(55, 60, sIsBoss);
+    TryGunSkills(hpMin, heavyHpMin, preferHigh);
 }
 
 // ============================================================================
@@ -3679,14 +3735,14 @@ void ACT_AttackOrGuard()
             }
             if (uid != -1)
             {
-                if (sMyCharId != 7)
+                if ((sMyCharId != 4) && (sMyCharId != 7))
                 {
                     AI_ACT_GUN();
                     AI_TAR_UID(uid);
                     sActionDone = 10;
                     return;
                 }
-                else if (IsHaruGunSafe() == 1)
+                else if (IsAoEGunSafe() == 1)
                 {
                     AI_ACT_GUN();
                     AI_TAR_UID(uid);
@@ -3811,14 +3867,14 @@ void ACT_AttackOrGuard()
         }
         if (uid != -1)
         {
-            if (sMyCharId != 7)
+            if ((sMyCharId != 4) && (sMyCharId != 7))
             {
                 AI_ACT_GUN();
                 AI_TAR_UID(uid);
                 sActionDone = 10;
                 return;
             }
-            else if (IsHaruGunSafe() == 1)
+            else if (IsAoEGunSafe() == 1)
             {
                 AI_ACT_GUN();
                 AI_TAR_UID(uid);
