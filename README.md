@@ -2,7 +2,7 @@
 
 **Author:** J1gno
 
-A complete overhaul of Persona 5 Royal's party member **Tactics AI**, inspired by Persona 3 Reload's *Arke Intelligence - Tactics Rewrite* and rebuilt from the ground up for P5R PC.
+A complete overhaul of Persona 5 Royal's party member **Tactics AI**, inspired by [cold_spirit](https://gamebanana.com/members/3645866)'s original [Arke Intelligence - Tactics Rewrite](https://gamebanana.com/mods/630268) for *Persona 3 Reload* and rebuilt from the ground up for P5R PC.
 
 If you like playing with Tactics (*Act Freely*, *Full Assault*, *Conserve SP*, *Heal/Support*)—or just want your teammates to stop making frustrating vanilla AI mistakes—this mod makes your party fight smart, use their full skill kits, and respect P5R's mechanics.
 
@@ -47,3 +47,14 @@ Or in PowerShell:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Source\build.ps1 -CompilerPath "path\to\AtlusScriptCompiler.exe"
 ```
+
+---
+
+## Credits & Acknowledgements
+
+- **[cold_spirit](https://gamebanana.com/members/3645866)**: Creator of the original [Arke Intelligence - Tactics Rewrite](https://gamebanana.com/mods/630268) for *Persona 3 Reload*, whose design philosophy, proactive support logic, and tactics rewrite inspired this Persona 5 Royal adaptation.
+- **J1gno**: Persona 5 Royal PC adaptation, FlowScript architecture, and rewrite.
+- **[Atlus Script Tools](https://github.com/tge-was-taken/Atlus-Script-Tools)** by TGE and contributors.
+- **[Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II)** & **[Persona Essentials](https://github.com/Sewer56/p5rpc.modloader)** by Sewer56 and contributors.
+- **Atlus / SEGA**: Original creators of *Persona 5 Royal*.
+
