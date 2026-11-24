@@ -297,6 +297,19 @@ int IsAttrKnownImpeded(int attr)
     return 0;
 }
 
+// Returns 1 if any enemy is KNOWN (analyzed) to null, repel, or absorb `attr`
+int IsAttrKnownImmune(int attr)
+{
+    int uid;
+    uid = AI_GET_UNIMUKOU(attr);
+    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
+    uid = AI_GET_UNIHANSYA(attr);
+    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
+    uid = AI_GET_UNIKYUSYU(attr);
+    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
+    return 0;
+}
+
 // ============================================================================
 // Initialize Turn Context
 // ============================================================================
@@ -389,7 +402,15 @@ void AI_pattern_Free()
     ACT_Rez();
     if (sActionDone != 0) { return; }
 
-    ACT_Heal(0);
+    // During a 1-More, only let critical healing (<= 40% HP) preempt chaining weaknesses/Baton Passes!
+    if (AI_CHK_MORE() == 1)
+    {
+        ACT_Heal(2);
+    }
+    else
+    {
+        ACT_Heal(0);
+    }
     if (sActionDone != 0) { return; }
 
     ACT_CureAilment();
@@ -403,6 +424,13 @@ void AI_pattern_Free()
 
     ACT_Takeover();
     if (sActionDone != 0) { return; }
+
+    // If a non-critical heal was deferred during a 1-More and no chain/pass existed, top off now
+    if (AI_CHK_MORE() == 1)
+    {
+        ACT_Heal(0);
+        if (sActionDone != 0) { return; }
+    }
 
     ACT_Fixed();
     if (sActionDone != 0) { return; }
@@ -710,10 +738,10 @@ void ACT_Showtime(int aggressive)
     }
 
     // Trigger Showtime on:
-    //   - Bosses and Disaster Shadows (always worthy)
+    //   - Bosses (> 10% HP so we don't overkill a sliver-HP phase transition) and Disaster Shadows
     //   - Full Assault: any fight with at least one foe > 35% HP
     //   - Other tactics: normal fights only when party is pressured (<= 50% HP) or multiple healthy foes (>= 2, > 65% HP, 50% roll)
-    if ((sIsBoss == 1) || (sIsUnstable == 1) || ((aggressive == 1) && (AI_CHK_ENALLHP(35) == 0)) || (AI_CHK_FRHP(50) == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(65) == 0) && (RND(100) < 50)))
+    if (((sIsBoss == 1) && (AI_CHK_ENALLHP(10) == 0)) || (sIsUnstable == 1) || ((aggressive == 1) && (AI_CHK_ENALLHP(35) == 0)) || (AI_CHK_FRHP(50) == 1) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(65) == 0) && (RND(100) < 50)))
     {
         AI_ACT_SP_ATTACK();
         if (sIsUnstable == 1)
@@ -828,6 +856,7 @@ void ACT_Rez()
 // Action: Tiered Party Healing (Arke Intelligence Style + Champion's Cup)
 //   proactive = 0: Act Freely (50% threshold; 65% for Morgana/Makoto)
 //   proactive = 1: Heal/Support (75% threshold)
+//   proactive = 2: Critical-only (40% threshold — used during Act Freely 1-Mores)
 // ============================================================================
 void ACT_Heal(int proactive)
 {
@@ -868,7 +897,12 @@ void ACT_Heal(int proactive)
         return;
     }
 
-    if (proactive == 1)
+    if (proactive == 2)
+    {
+        maxThresh = 40;
+        critThresh = 40;
+    }
+    else if (proactive == 1)
     {
         maxThresh = 75;
         critThresh = 50;
@@ -1393,10 +1427,14 @@ void ACT_CureAilment()
         }
         if (AI_CHK_MYABLESKIL(318) == 1)
         {
-            AI_ACT_SKILL(318); // Salvation
-            AI_TAR_RND();
-            sActionDone = 10;
-            return;
+            // Don't burn 48-SP Salvation on 2 minor non-blocking trash ailments (e.g. Burn + Hunger) at full HP!
+            if ((sIsBoss == 1) || (AI_CHK_FRBAD(0x0F3E) == 1) || (AI_CHK_FRHP(65) == 1))
+            {
+                AI_ACT_SKILL(318); // Salvation
+                AI_TAR_RND();
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
@@ -1483,8 +1521,8 @@ void ACT_CureAilment()
     }
     if (AI_CHK_MYABLESKIL(318) == 1)
     {
-        // Don't burn 48-SP Salvation on a single minor ailment (Burn/Hunger/Forget) in a normal trash fight!
-        if ((sIsBoss == 1) || (totalCount >= 2) || (AI_CHK_FRBAD(0x0F3E) == 1))
+        // Don't burn 48-SP Salvation on minor non-blocking trash ailments (Burn/Hunger/Forget) at full HP!
+        if ((sIsBoss == 1) || (AI_CHK_FRBAD(0x0F3E) == 1) || ((totalCount >= 2) && (AI_CHK_FRHP(65) == 1)))
         {
             AI_ACT_SKILL(318); // Salvation
             AI_TAR_RND();
@@ -1558,13 +1596,13 @@ void ACT_ChargeConcentrate(int aggressive)
         return;
     }
 
-    // Skip Physical Charge if fighting a lone enemy that Nulls/Repels/Drains Physical
+    // Skip Physical Charge if fighting a lone enemy KNOWN to Null/Repel/Drain Physical (no Turn-1 peeking!)
     physOk = 1;
     if ((sNotPhysical == 1) || (sLockMode == 1))
     {
         physOk = 0;
     }
-    else if ((sEnemyCount == 1) && (IsSinglePhysSafe() == 0))
+    else if ((sEnemyCount == 1) && (IsAttrKnownImmune(0) == 1))
     {
         physOk = 0;
     }
@@ -1638,6 +1676,15 @@ void ACT_1MoreWeakness(int aggressive)
     // Preserve vanilla Mouse/Gluttony check & check if standing enemies exist
     if ((AI_CHK_FRIDBAD(1, 0x00200000) == 1) || (sDownCount >= sEnemyCount))
     {
+        return;
+    }
+
+    // 0. Ambush AoE Almighty Down (Guiding Tendril 299, 20 SP, Ring of Sorrow): instant Hold Up on multi-enemy ambushes!
+    if ((sLockMode != 2) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0) && (sEnemyCount >= 2) && (sMySpPct >= 20) && (AI_CHK_MYABLESKIL(299) == 1))
+    {
+        AI_ACT_SKILL(299);
+        AI_TAR_RND();
+        sActionDone = 10;
         return;
     }
 
@@ -1722,6 +1769,10 @@ void ACT_1MoreWeakness(int aggressive)
                     }
 
                     skill = AI_GET_UNIBESTATTRSKIL(uid, attr, singleOnly);
+                    if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+                    {
+                        skill = AI_GET_UNIBESTATTRSKIL(uid, attr, 0);
+                    }
                     if (skill > 0)
                     {
                         sTargetUid = uid;
@@ -2185,8 +2236,9 @@ void ACT_GunSmart()
         return;
     }
 
-    // Frozen enemy (0x02) -> free ranged Gun Technical shatter if no enemy Null/Repel/Drains Gun!
-    if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENMUKOU(1) == 0) && (AI_CHK_ENHANSYA(1) == 0) && (AI_CHK_ENKYUSYU(1) == 0))
+    // Frozen enemy (0x02) -> free ranged Gun Technical shatter!
+    // (In P5R, Freeze temporarily removes the Frozen target's Gun Null/Repel/Drain; AoE guns were already checked above!)
+    if (AI_CHK_ENBAD(0x02) == 1)
     {
         AI_ACT_GUN();
         AI_TAR_BAD(0x02);
@@ -2247,6 +2299,28 @@ void ACT_UrgentDispel()
         if (AI_CHK_FRHOJO(0xAA) == 1)
         {
             AI_ACT_SKILL(355);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+
+    // Tetra Break (375, 9 SP) / Makara Break (376, 9 SP) when enemies put up repel barriers
+    if (AI_CHK_MYABLESKIL(375) == 1)
+    {
+        if (AI_CHK_ENHOJO(0x4000) == 1)
+        {
+            AI_ACT_SKILL(375);
+            AI_TAR_RND();
+            sActionDone = 10;
+            return;
+        }
+    }
+    if (AI_CHK_MYABLESKIL(376) == 1)
+    {
+        if (AI_CHK_ENHOJO(0x8000) == 1)
+        {
+            AI_ACT_SKILL(376);
             AI_TAR_RND();
             sActionDone = 10;
             return;
@@ -2621,7 +2695,7 @@ void ACT_Support(int guaranteed)
     {
         if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1))
         {
-            if ((sEnemyCount > 1) || (IsSinglePhysSafe() == 1))
+            if ((sEnemyCount > 1) || (IsAttrKnownImmune(0) == 0))
             {
                 if (CountCapableWithoutHojo(0x0100) >= 2)
                 {
@@ -2717,7 +2791,7 @@ void ACT_Support(int guaranteed)
     }
     if (AI_CHK_MYABLESKIL(184) == 1)
     {
-        if (((sIsBoss == 1) && (sMySpPct >= 30)) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50)))
+        if ((AI_CHK_ENID(190) == 0) && (((sIsBoss == 1) && (sMySpPct >= 30)) || ((AI_CHK_ENALLHP(50) == 0) && (sMySpPct >= 50))))
         {
             // Shield Joker first; only shield additional allies on bosses under Heal/Support with >= 50% SP
             allyId = 0;
@@ -2877,7 +2951,7 @@ void ACT_Support(int guaranteed)
                 return;
             }
         }
-        if ((sNotPhysical == 0) && (sLockMode != 1) && ((sEnemyCount > 1) || (IsSinglePhysSafe() == 1)) && (AI_CHK_MYABLESKIL(189) == 1))
+        if ((sNotPhysical == 0) && (sLockMode != 1) && ((sEnemyCount > 1) || (IsAttrKnownImmune(0) == 0)) && (AI_CHK_MYABLESKIL(189) == 1))
         {
             allyId = PickChargeAlly();
             if (allyId != 0)
@@ -3195,12 +3269,12 @@ void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
     }
 
     // Morgana: Miracle Rush (291) — AoE Med Phys high crit (16% HP cost -> require > 40% HP!)
-    // Use when Charged, under Conserve SP, or crit-fishing on standing non-boss foes without Phys resist/immunity
+    // Use when Charged, under Conserve SP, or crit-fishing on standing non-boss foes not KNOWN to resist Phys
     if ((allowAoE == 1) && (sMyHpPct > 40) && (AI_CHK_MYABLESKIL(291) == 1))
     {
-        if ((AI_CHK_MYHOJO(0x0100) == 1) || (sOrder == 2) || ((sIsBoss == 0) && (sDownCount < sEnemyCount) && (AI_CHK_ENRESIST(0) == 0)))
+        if ((AI_CHK_MYHOJO(0x0100) == 1) || (sOrder == 2) || ((sIsBoss == 0) && (sDownCount < sEnemyCount) && (IsAttrKnownImpeded(0) == 0)))
         {
-            if ((IsAoESafeForAttr(0) == 1) || ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1) && (AI_CHK_ENRESIST(0) == 0)))
+            if ((IsAoESafeForAttr(0) == 1) || ((sEnemyCount == 1) && (IsSinglePhysSafe() == 1) && (IsAttrKnownImpeded(0) == 0)))
             {
                 AI_ACT_SKILL(291);
                 AI_TAR_RND();
@@ -3468,6 +3542,10 @@ void ACT_BestOffense(int aggressive)
                     }
 
                     skill = AI_GET_UNIBESTATTRSKIL(uid, attr, singleOnly);
+                    if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+                    {
+                        skill = AI_GET_UNIBESTATTRSKIL(uid, attr, 0);
+                    }
                     if (skill > 0)
                     {
                         sTargetUid = uid;
@@ -3622,6 +3700,10 @@ void ACT_PhysZeroSP()
         {
             if (IsAoESafeForAttr(1) == 1) { singleOnly = 0; } else { singleOnly = 1; }
             skill = AI_GET_UNIBESTATTRSKIL(uid, 1, singleOnly);
+            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+            {
+                skill = AI_GET_UNIBESTATTRSKIL(uid, 1, 0);
+            }
             if (skill > 0)
             {
                 sTargetUid = uid;
@@ -3650,6 +3732,10 @@ void ACT_PhysZeroSP()
         {
             if (IsAoESafeForAttr(0) == 1) { singleOnly = 0; } else { singleOnly = 1; }
             skill = AI_GET_UNIBESTATTRSKIL(uid, 0, singleOnly);
+            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+            {
+                skill = AI_GET_UNIBESTATTRSKIL(uid, 0, 0);
+            }
             if (skill > 0)
             {
                 sTargetUid = uid;
@@ -3773,10 +3859,37 @@ void ACT_AttackOrGuard()
 
     myAttr = AI_GET_MYATTRATTACK();
 
-    // 1. Standing Phys-weak enemy for free melee 1 More (matches P3R ACT_AttackOrGuard; skips Shocked foes!)
-    if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
+    // If Charged (0x0100) and too low HP for Phys skills, skip basic melee (Step 7 tries Gun -> Magic -> Guard to preserve Charge!)
+    if ((AI_CHK_MYHOJO(0x0100) == 0) || (sMyHpPct > 35))
     {
-        uid = AI_GET_UNIWEAK_ST(myAttr);
+        // 1. Standing Phys-weak enemy for free melee 1 More (matches P3R ACT_AttackOrGuard; skips Shocked foes!)
+        if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
+        {
+            uid = AI_GET_UNIWEAK_ST(myAttr);
+            if (uid != -1)
+            {
+                if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+                {
+                    AI_ACT_ATTACK();
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+            }
+        }
+
+        // 2. Frozen enemy (0x02) -> free single-target melee Technical shatter!
+        // (In P5R, Freeze temporarily removes the Frozen target's Phys Null/Repel/Drain!)
+        if (AI_CHK_ENBAD(0x02) == 1)
+        {
+            AI_ACT_ATTACK();
+            AI_TAR_BAD(0x02);
+            sActionDone = 10;
+            return;
+        }
+
+        // 3. Any known Phys-weak enemy (skip Shocked foes!)
+        uid = AI_GET_UNIWEAK(myAttr);
         if (uid != -1)
         {
             if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
@@ -3787,66 +3900,44 @@ void ACT_AttackOrGuard()
                 return;
             }
         }
-    }
 
-    // 2. Frozen enemy (0x02) -> free melee Technical shatter if no enemy Null/Repel/Drains Phys (P3R ACT_FrozenEnemy parity!)
-    if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENMUKOU(myAttr) == 0) && (AI_CHK_ENHANSYA(myAttr) == 0) && (AI_CHK_ENKYUSYU(myAttr) == 0))
-    {
-        AI_ACT_ATTACK();
-        AI_TAR_BAD(0x02);
-        sActionDone = 10;
-        return;
-    }
-
-    // 3. Any known Phys-weak enemy (skip Shocked foes!)
-    uid = AI_GET_UNIWEAK(myAttr);
-    if (uid != -1)
-    {
-        if ((AI_CHK_UNIANALYZE_OPEN(uid, myAttr) == 1) && (AI_CHK_UNIBAD(uid, 4) == 0))
+        // 4. Prefer unanalyzed enemy with melee (probes Phys affinity safely; skip Shocked foes!)
+        uid = AI_GET_UNI_NOANALYZE(myAttr);
+        if (uid != -1)
         {
-            AI_ACT_ATTACK();
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
+            if (AI_CHK_UNIBAD(uid, 4) == 0)
+            {
+                AI_ACT_ATTACK();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
         }
-    }
 
-    // 4. Prefer unanalyzed enemy with melee (probes Phys affinity safely; skip Shocked foes!)
-    uid = AI_GET_UNI_NOANALYZE(myAttr);
-    if (uid != -1)
-    {
-        if (AI_CHK_UNIBAD(uid, 4) == 0)
+        // 5. Prefer normal-damage enemy that isn't Shocked (bug fix over vanilla!)
+        uid = AI_GET_UNINOMALHPMIN(myAttr);
+        if (uid != -1)
         {
-            AI_ACT_ATTACK();
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
+            if (AI_CHK_UNIBAD(uid, 4) == 0)
+            {
+                AI_ACT_ATTACK();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
         }
-    }
 
-    // 5. Prefer normal-damage enemy that isn't Shocked (bug fix over vanilla!)
-    uid = AI_GET_UNINOMALHPMIN(myAttr);
-    if (uid != -1)
-    {
-        if (AI_CHK_UNIBAD(uid, 4) == 0)
+        // 6. Engine general attack target if not Shocked
+        uid = AI_GET_UNI_ATTACK();
+        if (uid != -1)
         {
-            AI_ACT_ATTACK();
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
-        }
-    }
-
-    // 6. Engine general attack target if not Shocked
-    uid = AI_GET_UNI_ATTACK();
-    if (uid != -1)
-    {
-        if (AI_CHK_UNIBAD(uid, 4) == 0)
-        {
-            AI_ACT_ATTACK();
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
+            if (AI_CHK_UNIBAD(uid, 4) == 0)
+            {
+                AI_ACT_ATTACK();
+                AI_TAR_UID(uid);
+                sActionDone = 10;
+                return;
+            }
         }
     }
 
