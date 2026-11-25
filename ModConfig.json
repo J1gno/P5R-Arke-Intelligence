@@ -5,7 +5,7 @@
   "ModVersion": "1.0.0",
   "ModDescription": "Overhauls Persona 5 Royal's party member Tactics AI (Act Freely, Full Assault, Conserve SP, Heal/Support) so teammates fight smarter, use their full skill kits (including Baton Pass, Technicals, Showtimes, and accessory skills), and avoid vanilla AI mistakes. Inspired by cold_spirit's Arke Intelligence for P3R (https://gamebanana.com/mods/630268).",
   "ModDll": "",
-  "ModIcon": "",
+  "ModIcon": "Preview.png",
   "ModR2RManagedDll32": "",
   "ModR2RManagedDll64": "",
   "ModNativeDll32": "",
