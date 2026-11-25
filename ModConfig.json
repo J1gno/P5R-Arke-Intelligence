@@ -1,9 +1,9 @@
 {
-  "ModId": "p5rpc.gameplay.arkeintelligence",
-  "ModName": "Arke Intelligence - Tactics Rewrite (P5R)",
+  "ModId": "p5rpc.gameplay.tacticsrewritten",
+  "ModName": "P5R Tactics Rewritten",
   "ModAuthor": "J1gno",
   "ModVersion": "1.0.0",
-  "ModDescription": "Overhauls P5R's Tactics AI so teammates fight smarter and use their full skill kits. Inspired by cold_spirit's P3R mod.",
+  "ModDescription": "Overhauls P5R's Tactics AI so teammates fight smarter and use their full skill kits. Based on work by cold_spirit.",
   "ModDll": "",
   "ModIcon": "Preview.png",
   "ModR2RManagedDll32": "",
@@ -19,7 +19,7 @@
   "CanUnload": null,
   "HasExports": null,
   "IsLibrary": false,
-  "ReleaseMetadataFileName": "p5rpc.gameplay.arkeintelligence.ReleaseMetadata.json",
+  "ReleaseMetadataFileName": "p5rpc.gameplay.tacticsrewritten.ReleaseMetadata.json",
   "IgnoreRegexes": [
     "^Source/.*",
     "^README\\.md$",

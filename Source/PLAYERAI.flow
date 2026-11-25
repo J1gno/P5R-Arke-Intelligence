@@ -1,5 +1,5 @@
-// Arke Intelligence - Tactics Rewrite (Persona 5 Royal PC)
-// Author: J1gno | Inspired by cold_spirit (https://gamebanana.com/mods/630268)
+// P5R Tactics Rewritten
+// Author: J1gno | Based on work by cold_spirit (https://gamebanana.com/mods/630268)
 // Compile target: BASE.CPK -> BATTLE/SCRIPT/PLAYERAI.BF (FlowScript V3BE / P5R)
 
 int sActionDone;      // 0=undecided, 1=deferred (sSkillId/sTargetUid), 10=issued

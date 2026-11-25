@@ -1,8 +1,8 @@
-# Arke Intelligence - Tactics Rewrite (Persona 5 Royal PC)
+# P5R Tactics Rewritten
 
 **Author:** J1gno
 
-A complete overhaul of Persona 5 Royal's party member **Tactics AI**, inspired by cold_spirit's original [Arke Intelligence - Tactics Rewrite](https://gamebanana.com/mods/630268) for *Persona 3 Reload* and rebuilt from the ground up for P5R PC.
+A complete overhaul of Persona 5 Royal's party member **Tactics AI**, based on work by **cold_spirit** ([Arke Intelligence - Tactics Rewrite](https://gamebanana.com/mods/630268) for *Persona 3 Reload*) and rebuilt from the ground up for P5R PC.
 
 If you like playing with Tactics (*Act Freely*, *Full Assault*, *Conserve SP*, *Heal/Support*)—or just want your teammates to stop making frustrating vanilla AI mistakes—this mod makes your party fight smart, use their full skill kits, and respect P5R's mechanics.
 
@@ -10,8 +10,8 @@ If you like playing with Tactics (*Act Freely*, *Full Assault*, *Conserve SP*, *
 
 1. Install **Reloaded-II** and add `P5R.exe`.
 2. Make sure **Persona Essentials** (`p5rpc.modloader`) is installed and enabled.
-3. Place the `P5R_ArkeIntelligence` folder into your Reloaded-II `Mods` folder.
-4. Enable **Arke Intelligence - Tactics Rewrite (P5R)** in Reloaded-II and launch the game.
+3. Place the `P5R_TacticsRewritten` folder into your Reloaded-II `Mods` folder.
+4. Enable **P5R Tactics Rewritten** in Reloaded-II and launch the game.
 
 ## What Each Tactic Does
 
@@ -52,7 +52,7 @@ powershell -ExecutionPolicy Bypass -File .\Source\build.ps1 -CompilerPath "path\
 
 ## Credits & Acknowledgements
 
-- **[cold_spirit](https://gamebanana.com/members/3645866)**: Creator of the original [Arke Intelligence - Tactics Rewrite](https://gamebanana.com/mods/630268) for *Persona 3 Reload*, whose mod design, proactive support logic, and tactics rewrite inspired this Persona 5 Royal adaptation.
+- **[cold_spirit](https://gamebanana.com/members/3645866)**: Original concept / based on work from [Arke Intelligence - Tactics Rewrite](https://gamebanana.com/mods/630268) for *Persona 3 Reload*, whose mod design, proactive support logic, and tactics rewrite inspired this Persona 5 Royal adaptation.
 - **[xeeoh](https://bsky.app/profile/xeeoh.bsky.social)**: Banner and icon art for the original mod (I used AI to modify it to replace Aigis with Joker and I don't intend to take full credit as I didn't create it in the first place).
 - **[Atlus Script Tools](https://github.com/tge-was-taken/Atlus-Script-Tools)** by TGE and contributors.
 - **[Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II)** & **[Persona Essentials](https://github.com/Sewer56/p5rpc.modloader)** by Sewer56 and contributors.
