@@ -1,49 +1,33 @@
-// ============================================================================
-// Arke Intelligence - Tactics Rewrite (Persona 5 Royal PC Edition)
-// Author: J1gno
-// Target file: BASE.CPK -> BATTLE/SCRIPT/PLAYERAI.BF (FlowScript V3BE / P5R)
-//
-// Inspired by Arke Intelligence - Tactics Rewrite (Persona 3 Reload) by cold_spirit:
-// https://gamebanana.com/mods/630268
-// Rebuilt from the ground up for Persona 5 Royal PC with full support for:
-//   - All 4 P5R Tactics (Act Freely, Full Assault, Conserve SP, Heal/Support)
-//   - Showtime, Baton Pass (+ Technical / Healer / Charged routing), Technicals
-//   - Smart Gun & Physical skill usage (including zero-SP Phys/Gun under Conserve SP)
-//   - Full Buff/Debuff/Karn/Wall/Break, 3rd-Semester & Will Seed Ring skills
-//   - Tiered party HP & 3-family Ailment scanning
-//   - All vanilla P5R boss/scripted-encounter rules (Maruki lockouts, Wakaba,
-//     Disaster Shadows, Treasure Demons, Mouse/Forget safety)
-// ============================================================================
+// Arke Intelligence - Tactics Rewrite (Persona 5 Royal PC)
+// Author: J1gno | Inspired by cold_spirit (https://gamebanana.com/mods/630268)
+// Compile target: BASE.CPK -> BATTLE/SCRIPT/PLAYERAI.BF (FlowScript V3BE / P5R)
 
-// Script-level state (initialized every turn in Initialize)
-int sActionDone;      // 0 = undecided, 1 = deferred (sSkillId/sTargetUid), 10 = issued
-int sTargetUid;       // Target unit UID for deferred action
-int sSkillId;         // Skill ID for deferred action
+int sActionDone;      // 0=undecided, 1=deferred (sSkillId/sTargetUid), 10=issued
+int sTargetUid;
+int sSkillId;
 
-int sMyUid;           // Acting unit Battle UID (AI_GET_MY_ID)
-int sMyCharId;        // Acting party character ID 1..10 (BTL_GET_CURRENT_CHARAID)
-int sOrder;           // Active tactic: 0=ActFreely, 1=FullAssault, 2=ConserveSP, 3=HealSupport
-int sMyHpPct;         // Acting unit HP% (0..100)
-int sMySpPct;         // Acting unit SP% (0..100)
+int sMyUid;
+int sMyCharId;        // Party character ID 1..10 (8 = navigator, skipped in combatant loops)
+int sOrder;           // 0=ActFreely, 1=FullAssault, 2=ConserveSP, 3=HealSupport
+int sMyHpPct;
+int sMySpPct;
 
-int sIsBoss;          // 1 if boss or exceptional encounter
-int sIsUnstable;      // 1 if a Disaster Shadow is present
-int sIsHouma;         // 1 if a Treasure Demon is present
-int sNotPhysical;     // 1 if physical/melee blocked (e.g. flying Cognitive Wakaba)
-int sLockMode;        // Maruki Reality lockout mode (0=none, 1..7)
-int sSingleOnlyFlag;  // BIT 11601: prioritize single-target over AoE
-int sNo1MoreFlag;     // BIT 11618: disable 1-More / Gun / Unknown-attr probing
+int sIsBoss;
+int sIsUnstable;      // Disaster Shadow present
+int sIsHouma;         // Treasure Demon present
+int sNotPhysical;     // 1 when melee/Phys is blocked (flying enemies)
+int sLockMode;        // Scripted battle lockout (BIT 11634 + COUNT 214): 1=Phys/Gun 2=Magic 3=Support 4=Heal 5=Guard 6=BatonPass 7=Ailment/Rez
+int sSingleOnlyFlag;  // BIT 11601: single-target only
+int sNo1MoreFlag;     // BIT 11618: disable 1-More / Gun / affinity probing
 int sNoFinishFlag;    // BIT 11718: disable melee end-battle finisher
 int sAilmentPrioFlag; // BIT 11715: prioritize ailment skills
 
-int sEnemyCount;      // Active enemy count
-int sDownCount;       // Downed enemy count
-int sIsHealerChar;    // 1 if Morgana (3) or Makoto (6)
-int sIsSupportChar;   // 1 if Morgana (3), Yusuke (5), Makoto (6), or Haru (7)
+int sEnemyCount;
+int sDownCount;
+int sIsHealerChar;
+int sIsSupportChar;
 
-// ============================================================================
 // Procedure Index 0: Engine Entry Point (MUST remain index 0)
-// ============================================================================
 void main_AI_routine()
 {
     Initialize();
@@ -53,7 +37,7 @@ void main_AI_routine()
         return;
     }
 
-    // Shido's Palace Mouse status (0x00400000): Persona skills, Guns, Showtime & Baton Pass are disabled.
+    // Mouse (0x00400000): skills, Gun, Showtime & Baton Pass are disabled.
     if (AI_CHK_MYBAD(0x00400000) == 1)
     {
         ACT_ChargeGuard();
@@ -73,7 +57,7 @@ void main_AI_routine()
         return;
     }
 
-    // when afflicted with Forget (0x40), still finish off foes,
+    // Forget (0x40): Persona skills disabled; still allow melee finisher, Guard, Gun & Baton Pass.
     if (AI_CHK_MYBAD(0x40) == 1)
     {
         ACT_EndBattle_ATK();
@@ -135,10 +119,6 @@ void main_AI_routine()
     ACT_AttackOrGuard();
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 int IsAllyAlive(int charId)
 {
     if (charId == 8)
@@ -156,7 +136,7 @@ int IsAllyAlive(int charId)
     return 1;
 }
 
-// Combined bitmask 0x0F3E = Freeze|Shock|Dizzy|Confuse|Fear|Sleep|Rage|Despair|Brainwash, plus Mouse (0x00400000)
+// 0x0F3E = Freeze|Shock|Dizzy|Confuse|Fear|Sleep|Rage|Despair|Brainwash; 0x00400000 = Mouse
 int IsAllyCapable(int charId)
 {
     if (IsAllyAlive(charId) == 0)
@@ -170,7 +150,6 @@ int IsAllyCapable(int charId)
     return 1;
 }
 
-// Returns 1 if party member charId can use Persona skills (not incapacitated and not Forgotten 0x40)
 int IsAllySkillCapable(int charId)
 {
     if (IsAllyCapable(charId) == 0)
@@ -308,9 +287,6 @@ int IsAttrKnownImmune(int attr)
     return 0;
 }
 
-// ============================================================================
-// Initialize Turn Context
-// ============================================================================
 void Initialize()
 {
     int maxHp;
@@ -356,7 +332,7 @@ void Initialize()
     sEnemyCount = AI_GET_E_NUM();
     sDownCount = AI_GET_ENBAD_ON(0x00100000);
 
-    // Maruki Reality lockouts (BIT 11634 + COUNT 214)
+    // 805306368 (0x30000000) = P5R battle flag base (BIT 11634 / 11601 / 11618 / 11718 / 11715)
     sLockMode = 0;
     if (BIT_CHK(805306368 + 370) == 1)
     {
@@ -383,9 +359,7 @@ void Initialize()
     AI_ACT_SKILL(0);
 }
 
-// ============================================================================
-// Tactic 0: Act Freely (Balanced Tactical AI — Arke Intelligence Style)
-// ============================================================================
+// Tactic 0: Act Freely
 void AI_pattern_Free()
 {
     int roll;
@@ -399,7 +373,7 @@ void AI_pattern_Free()
     ACT_Rez();
     if (sActionDone != 0) { return; }
 
-    // During a 1-More, only let critical healing (<= 40% HP) or incapacitating ailments (0x0F3E)
+    // During a 1-More, only critical healing (<=40% HP) or incapacitating ailments (0x0F3E) preempt weakness/Baton Pass chains.
     if (AI_CHK_MORE() == 1)
     {
         ACT_Heal(2);
@@ -503,9 +477,7 @@ void AI_pattern_Free()
     sActionDone = 0;
 }
 
-// ============================================================================
-// Tactic 1: Full Assault (Aggressive Offense, Charge/Concentrate & Baton Pass)
-// ============================================================================
+// Tactic 1: Full Assault
 void AI_pattern_Damage()
 {
     ACT_EndBattle_ATK();
@@ -550,9 +522,7 @@ void AI_pattern_Damage()
     sActionDone = 0;
 }
 
-// ============================================================================
-// Tactic 2: Conserve SP (Zero-SP Phys/Gun Skills, Free Combos & Smart Guard)
-// ============================================================================
+// Tactic 2: Conserve SP
 void AI_pattern_SaveSP()
 {
     ACT_EndBattle_ATK();
@@ -585,9 +555,7 @@ void AI_pattern_SaveSP()
     sActionDone = 0;
 }
 
-// ============================================================================
-// Tactic 3: Heal/Support (Proactive Healing, Curing, Buffs, Debuffs & Shields)
-// ============================================================================
+// Tactic 3: Heal/Support
 void AI_pattern_SaveHP()
 {
     ACT_EndBattle_ATK();
@@ -641,9 +609,6 @@ void AI_pattern_SaveHP()
     sActionDone = 0;
 }
 
-// ============================================================================
-// Action: Finish Battle With Free Melee Attack (Last Enemy Kill Check)
-// ============================================================================
 void ACT_EndBattle_ATK()
 {
     int myAttr;
@@ -671,7 +636,7 @@ void ACT_EndBattle_ATK()
         }
         if (uid != -1)
         {
-            // Never melee a Shocked (0x04) or Tetrakarn-shielded (0x4000) enemy!
+            // Skip Shocked (0x04, spreads on melee contact) and Tetrakarn (0x4000).
             if ((AI_CHK_UNIBAD(uid, 4) == 0) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
                 if (AI_CHK_UNIATTACK(uid) == 1)
@@ -686,9 +651,6 @@ void ACT_EndBattle_ATK()
     }
 }
 
-// ============================================================================
-// Action: Guard Against Telegraphed Boss Super-Attacks
-// ============================================================================
 void ACT_ChargeGuard()
 {
     int res;
@@ -705,9 +667,6 @@ void ACT_ChargeGuard()
     }
 }
 
-// ============================================================================
-// Action: Showtime (Smart Triggering — Saves Showtime for Worthy Targets)
-// ============================================================================
 void ACT_Showtime(int aggressive)
 {
     if (AI_CHK_SP_ATTACK() != 1)
@@ -735,9 +694,6 @@ void ACT_Showtime(int aggressive)
     }
 }
 
-// ============================================================================
-// Action: Revive Fallen Allies (Samarecarm > Recarm > Engine Fallback)
-// ============================================================================
 void ACT_Rez()
 {
     int res;
@@ -749,7 +705,7 @@ void ACT_Rez()
         return;
     }
 
-    // Fast O(1) exit when no party member is KO'd (0x00080000)
+    // 0x00080000 = KO
     if (AI_CHK_FRBAD(0x00080000) == 0)
     {
         return;
@@ -829,10 +785,7 @@ void ACT_Rez()
     }
 }
 
-// ============================================================================
-// Action: Tiered Party Healing (Arke Intelligence Style + Champion's Cup)
-//   proactive = 2: Critical-only (40% threshold — used during Act Freely 1-Mores)
-// ============================================================================
+// proactive: 0=Act Freely (65% healer / 50% other), 1=Heal/Support (75%), 2=1-More critical-only (40%)
 void ACT_Heal(int proactive)
 {
     int maxThresh;
@@ -1006,7 +959,7 @@ void ACT_Heal(int proactive)
             sActionDone = 10;
             return;
         }
-        // Champion's Cup (183): Med heal + Tarukaja (skip when Maruki locks Support mode 3!)
+        // Skill 183 (Champion's Cup): heal + Tarukaja (0x01); blocked under sLockMode 3.
         if ((sLockMode != 3) && (AI_CHK_MYABLESKIL(183) == 1) && (AI_CHK_FRIDHOJO(worstChar, 0x01) == 0))
         {
             AI_ACT_SKILL(183);
@@ -1106,9 +1059,6 @@ void ACT_Heal(int proactive)
     }
 }
 
-// ============================================================================
-// Action: Emergency-Only Revival & Healing (for Conserve SP)
-// ============================================================================
 void ACT_EmergencyRezAndHeal()
 {
     int id;
@@ -1253,7 +1203,7 @@ void ACT_EmergencyRezAndHeal()
         }
     }
 
-    // Emergency cure for lethal/catastrophic ailments only: Despair (0x0400) or Brainwash (0x0800)
+    // 0x0C00 = Despair (0x0400) | Brainwash (0x0800)
     if ((sLockMode != 7) && (AI_CHK_FRBAD(0x0C00) == 1))
     {
         badChar = 0;
@@ -1317,10 +1267,6 @@ void ACT_EmergencyRezAndHeal()
     }
 }
 
-// ============================================================================
-// Action: 3-Family Party Ailment Curing (Baisudi / Patra / Energy / Amrita / Wings)
-// Uses SKILL.TBL combined bitmasks (0x0FFF, 0x0007, 0x01C8, 0x0E30) for O(1) fast-exit!
-// ============================================================================
 void ACT_CureAilment()
 {
     int id;
@@ -1553,9 +1499,6 @@ void ACT_CureAilment()
     }
 }
 
-// ============================================================================
-// Action: Charge / Concentrate / Fighting Spirit / High Energy Setup
-// ============================================================================
 void ACT_ChargeConcentrate(int aggressive)
 {
     int enemyHealthy;
@@ -1614,7 +1557,7 @@ void ACT_ChargeConcentrate(int aggressive)
         physOk = 0;
     }
 
-    // Party-wide Charge: Fighting Spirit (290, 80 SP, Ryuji 3rd sem) — boss-only & requires >= 2 un-Charged allies!
+    // 290=Fighting Spirit / 360=Charge (HOJO 0x0100); 294=High Energy / 361=Concentrate (HOJO 0x0200)
     if ((physOk == 1) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MYABLESKIL(290) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
     {
         if (CountCapableWithoutHojo(0x0100) >= 2)
@@ -1626,7 +1569,6 @@ void ACT_ChargeConcentrate(int aggressive)
         }
     }
 
-    // Party-wide Concentrate: High Energy (294, 80 SP, Ann 3rd sem) — boss-only & requires >= 2 un-Concentrated allies!
     if ((sLockMode != 2) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MYABLESKIL(294) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
     {
         if (CountCapableWithoutHojo(0x0200) >= 2)
@@ -1661,9 +1603,6 @@ void ACT_ChargeConcentrate(int aggressive)
     }
 }
 
-// ============================================================================
-// Action: Full 10-Element 1-More Weakness Exploit (Includes Phys 0 & Gun 1!)
-// ============================================================================
 void ACT_1MoreWeakness(int aggressive)
 {
     int attr;
@@ -1683,7 +1622,7 @@ void ACT_1MoreWeakness(int aggressive)
         return;
     }
 
-    // 0. Ambush AoE Almighty Down (Guiding Tendril 299, 20 SP, Ring of Sorrow): instant Hold Up opener on ambushes!
+    // Skill 299 (Guiding Tendril): ambush AoE down; AI_CHK_MYUSESKIL(299)==0 + AI_CHK_MORE()==0 prevent repeat loops.
     if ((sLockMode != 2) && (sIsBoss == 0) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0) && (AI_CHK_MORE() == 0) && (((sEnemyCount - sDownCount) >= 2) || ((sIsHouma == 1) && (sDownCount == 0))) && (sMySpPct >= 20) && (AI_CHK_MYHOJO(0x0200) == 0) && (AI_CHK_MYUSESKIL(299) == 0) && (AI_CHK_MYABLESKIL(299) == 1))
     {
         AI_ACT_SKILL(299);
@@ -1692,7 +1631,6 @@ void ACT_1MoreWeakness(int aggressive)
         return;
     }
 
-    // 1. Free Gun knockdown on standing Gun-weak enemy (saves SP! Skip enemy Tetrakarn 0x4000!)
     if ((sLockMode != 1) && (AI_GET_BULLET() > 0))
     {
         uid = AI_GET_UNIWEAK_ST(1);
@@ -1718,7 +1656,7 @@ void ACT_1MoreWeakness(int aggressive)
         }
     }
 
-    // Skip if Charged (don't waste 2.5x Charge on basic melee!), in Full Assault, Shocked (0x04), or Tetrakarn (0x4000)!
+    // Preserve Charge (0x0100) rather than spending it on basic melee.
     if ((sLockMode != 1) && (sNotPhysical == 0) && (aggressive == 0) && (AI_CHK_MYHOJO(0x0100) == 0))
     {
         res = AI_GET_MYATTRATTACK();
@@ -1788,9 +1726,7 @@ void ACT_1MoreWeakness(int aggressive)
     }
 }
 
-// ============================================================================
-// Action: Smart Baton Pass (Weakness -> Technical -> Emergency Heal -> Charged/Joker)
-// ============================================================================
+// Baton Pass priority: Weakness -> Technical -> Emergency Heal -> Charged/Joker/DPS
 void ACT_Takeover()
 {
     int id;
@@ -2000,7 +1936,7 @@ void ACT_Takeover()
         }
     }
 
-    // (Skip if acting character is already Charged/Concentrated (0x0300) so they unleash their own nuke!)
+    // Skip passing if self is Charged/Concentrated (0x0300) so actor unleashes own buff.
     if (AI_CHK_MYHOJO(0x0300) == 0)
     {
         id = 2;
@@ -2055,14 +1991,11 @@ void ACT_Takeover()
     }
 }
 
-// ============================================================================
-// Action: Technical Combos + Akechi Rebellion Blade on Downed Enemies
-// ============================================================================
 void ACT_Technical()
 {
     int res;
 
-    // Akechi's 3rd-semester Rebellion Blade (297, 99 SP!): colossal Almighty bonus on Downed foes!
+    // Skill 297 (Rebellion Blade): bonus Almighty damage on Downed (0x00100000) foes.
     if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(297) == 1) && (AI_CHK_ENBAD(0x00100000) == 1))
     {
         if (((sIsBoss == 1) && ((AI_CHK_MYHOJO(0x0200) == 1) || (sOrder == 1) || (sMySpPct >= 30))) || ((sOrder == 1) && (sMySpPct >= 35) && (AI_CHK_ENALLHP(40) == 0)))
@@ -2079,7 +2012,7 @@ void ACT_Technical()
         return;
     }
 
-    // Never let engine AI_ACT_TECHNICAL() preempt a 2.5x Charged/Concentrated nuke or fire into enemy Karns (0xC000)!
+    // Skip engine AI_ACT_TECHNICAL() while Charged/Concentrated (0x0300) or enemy Karns (0xC000) are active.
     if ((AI_CHK_MYHOJO(0x0300) == 1) || (AI_CHK_ENHOJO(0xC000) == 1))
     {
         return;
@@ -2092,9 +2025,6 @@ void ACT_Technical()
     }
 }
 
-// ============================================================================
-// Action: Gun Finisher & Gun Weakness Knockdown
-// ============================================================================
 void ACT_KillEnemy_Gun()
 {
     int uid;
@@ -2112,7 +2042,6 @@ void ACT_KillEnemy_Gun()
         }
     }
 
-    // prefer low-HP Gun-weak target first, then normal low-HP target (skip Tetrakarn 0x4000!)
     uid = AI_GET_UNIWEAKHPMIN(1);
     if (uid != -1)
     {
@@ -2155,7 +2084,6 @@ void ACT_GunWeakOrKill()
         }
     }
 
-    // 1. Standing Gun-weak enemy for 1 More (skip Tetrakarn 0x4000!)
     uid = AI_GET_UNIWEAK_ST(1);
     if (uid != -1)
     {
@@ -2188,7 +2116,6 @@ void ACT_GunSmart()
         }
     }
 
-    // Check standing Gun-weak -> any Gun-weak -> Frozen -> normal-damage single target -> unanalyzed target (skip Tetrakarn 0x4000!).
     uid = AI_GET_UNIWEAK_ST(1);
     if (uid != -1)
     {
@@ -2218,7 +2145,7 @@ void ACT_GunSmart()
         return;
     }
 
-    // Frozen enemy (0x02) -> free ranged Gun Technical shatter (skip if enemy Tetrakarn 0x4000 is active!)
+    // Freeze (0x02) Technical
     if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENHOJO(0x4000) == 0))
     {
         AI_ACT_GUN();
@@ -2252,9 +2179,6 @@ void ACT_GunSmart()
     }
 }
 
-// ============================================================================
-// Action: Urgent Dispel (Dekaja on Buffed Boss/Foes, Dekunda on Debuffed Party)
-// ============================================================================
 void ACT_UrgentDispel()
 {
     if (sLockMode == 3)
@@ -2267,7 +2191,7 @@ void ACT_UrgentDispel()
         return;
     }
 
-    // Dekaja (356): combined bitmask 0x55 = AtkUp(0x01)|EvaUp(0x04)|DefUp(0x10)|AccUp(0x40) (1 COMM call!)
+    // 356=Dekaja; 0x55 = AtkUp(0x01)|EvaUp(0x04)|DefUp(0x10)|AccUp(0x40)
     if (AI_CHK_MYABLESKIL(356) == 1)
     {
         if (AI_CHK_ENHOJO(0x55) == 1)
@@ -2279,7 +2203,7 @@ void ACT_UrgentDispel()
         }
     }
 
-    // Dekunda (355): combined bitmask 0xAA = AtkDown(0x02)|EvaDown(0x08)|DefDown(0x20)|AccDown(0x80) (1 COMM call!)
+    // 355=Dekunda; 0xAA = AtkDown(0x02)|EvaDown(0x08)|DefDown(0x20)|AccDown(0x80)
     if (AI_CHK_MYABLESKIL(355) == 1)
     {
         if (AI_CHK_FRHOJO(0xAA) == 1)
@@ -2313,10 +2237,6 @@ void ACT_UrgentDispel()
     }
 }
 
-// ============================================================================
-// Helper: Pick best un-Concentrated Magic ally for President's Insight (187)
-// Skips Forgotten/incapacitated allies and AI allies on Conserve SP (2) or Heal/Support (3)!
-// ============================================================================
 int PickConcentrateAlly()
 {
     int uid;
@@ -2329,10 +2249,6 @@ int PickConcentrateAlly()
     return 0;
 }
 
-// ============================================================================
-// Helper: Pick best un-Charged Physical ally for Tyrant's Will (189)
-// Skips Forgotten/incapacitated allies, Heal/Support (3) allies, and critically low HP allies!
-// ============================================================================
 int PickChargeAlly()
 {
     int uid;
@@ -2345,10 +2261,7 @@ int PickChargeAlly()
     return 0;
 }
 
-// ============================================================================
-// Helper: Pick best un-shielded ally for Bleeding Dry Brush (184)
-// Priority: Joker (1) -> alive ally without Universal Drain (HOJO2 bit 2)
-// ============================================================================
+// HOJO2 bit 2 = Bleeding Dry Brush (184) Universal Drain barrier
 int PickDrainBarrierAlly()
 {
     int id;
@@ -2377,10 +2290,6 @@ int PickDrainBarrierAlly()
     return 0;
 }
 
-// ============================================================================
-// Helper: Pick alive ally missing HOJO bit `mask` (Joker first, ignores KO'd allies!)
-// Prevents dead-ally buff spam and guarantees valid single-target buff targeting.
-// ============================================================================
 int PickAllyWithoutHojo(int mask)
 {
     int id;
@@ -2409,10 +2318,7 @@ int PickAllyWithoutHojo(int mask)
     return 0;
 }
 
-// ============================================================================
-// Action: Full Buff / Debuff / Shield / 3rd-Semester / Will Seed Ring Support
-//   guaranteed = 1 in Heal/Support (includes party Charge/Concentrate & Ring gifts)
-// ============================================================================
+// guaranteed = 1 in Heal/Support (enables party Charge/Concentrate and secondary-ally shields)
 void ACT_Support(int guaranteed)
 {
     int allyId;
@@ -2423,7 +2329,6 @@ void ACT_Support(int guaranteed)
         return;
     }
 
-    // 2. Party-wide All-Stat Debuff: Checkmate (292, 90 SP, Makoto 3rd sem) — boss-only & requires >= 2 missing debuffs (or multi-foe boss)
     if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(292) == 1))
     {
         if ((sEnemyCount >= 2) || (AI_CHK_MYABLESKIL(348) == 0))
@@ -2527,7 +2432,6 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // 5. Party-wide All-Stat Buffs: Hyakka Ryouran (293, 90 SP, Yusuke 3rd sem) / Thermopylae (343)
     if ((AI_CHK_MYABLESKIL(293) == 1) || (AI_CHK_MYABLESKIL(343) == 1))
     {
         if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(293) == 1))
@@ -2662,7 +2566,6 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // 7. Party Charge/Concentrate under Heal/Support (Fighting Spirit 290, High Energy 294 — 80 SP, boss-only!)
     if ((guaranteed == 1) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MORE() == 0))
     {
         if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1))
@@ -2690,7 +2593,7 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // 8. Critical Rate Buffs: Brave Step (303 -> HOJO 0x1000), Revolution (366 -> 0x2000), Rebellion (365 -> 0x1000)
+    // Crit buffs: Brave Step (303, 0x1000), Revolution (366, 0x2000), Rebellion (365, 0x1000)
     if (AI_CHK_MYABLESKIL(303) == 1)
     {
         if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 30)))
@@ -2708,7 +2611,7 @@ void ACT_Support(int guaranteed)
             }
         }
     }
-    // Revolution (366) boosts crit rate for BOTH allies AND enemies (SKILL.TBL validTargets=0x03) — NEVER cast on bosses!
+    // Revolution (366) affects enemies too (SKILL.TBL validTargets=0x03) - skip on bosses.
     if ((sIsBoss == 0) && (AI_CHK_MYABLESKIL(366) == 1))
     {
         if ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 25))
@@ -2747,8 +2650,7 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // 9. Barriers & Shields: Life Wall (296, 95 SP), Bleeding Dry Brush (184, 22 SP), Tetrakarn (370, 24 SP), Makarakarn (371, 24 SP), Tetraja (372, 24 SP)
-    // Skip Karn repel shields (Life Wall / Tetrakarn / Makarakarn) against The Reaper (Enemy ID 190)
+    // Skip Karn/drain shields (296/184/370/371) vs Enemy ID 190 (triggers infinite repel-punish Megidolaon loop); 372=Tetraja (0x02000000).
     if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(296) == 1))
     {
         if ((AI_CHK_ENID(190) == 0) && (AI_CHK_FRHOJO(0xC000) == 0))
@@ -2839,7 +2741,7 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    // Verified directly from SKILL.TBL: Fire=0x01, Ice=0x02, Wind(387)=0x04, Elec(388)=0x08, Nuke(395)=0x10, Psy(396)=0x20 (<< 16)
+    // Break HOJO bits (SKILL.TBL): Fire(385)=0x01, Ice(386)=0x02, Wind(387)=0x04, Elec(388)=0x08, Nuke(395)=0x10, Psy(396)=0x20 (<< 16)
     if ((sIsBoss == 1) || ((sEnemyCount == 1) && (AI_CHK_ENALLHP(50) == 0)))
     {
         if (AI_CHK_MYABLESKIL(385) == 1)
@@ -2866,7 +2768,7 @@ void ACT_Support(int guaranteed)
         {
             if ((AI_CHK_NOTENHOJO(0x00080000) == 1) && (IsAttrKnownImpeded(4) == 1))
             {
-                AI_ACT_SKILL(388); // Elec Break (SKILL.TBL bit 0x00080000!)
+                AI_ACT_SKILL(388);
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
@@ -2876,7 +2778,7 @@ void ACT_Support(int guaranteed)
         {
             if ((AI_CHK_NOTENHOJO(0x00040000) == 1) && (IsAttrKnownImpeded(5) == 1))
             {
-                AI_ACT_SKILL(387); // Wind Break (SKILL.TBL bit 0x00040000!)
+                AI_ACT_SKILL(387);
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
@@ -2956,10 +2858,7 @@ void ACT_Support(int guaranteed)
     }
 }
 
-// ============================================================================
-// Action: Uniform Random Buff/Debuff Refresh (Heal/Support Maintenance)
-// Zero arrays -> zero compiler warnings, exact uniform distribution!
-// ============================================================================
+// Two-pass uniform random selector (no arrays in FlowScript): Pass 1 (numAvail) and Pass 2 (chosen) must stay identical.
 void ACT_SupportRefresh()
 {
     int numAvail;
@@ -3096,9 +2995,6 @@ void ACT_SupportRefresh()
     }
 }
 
-// ============================================================================
-// Action: Ailment Skills
-// ============================================================================
 void ACT_Ailment(int forced)
 {
     int res;
@@ -3108,7 +3004,7 @@ void ACT_Ailment(int forced)
         return;
     }
 
-    // Don't waste SP casting ailments on nearly-dead trash mobs, at low SP, or into enemy Makarakarn (0x8000 reflects magic ailments!)
+    // Makarakarn (0x8000) reflects magic ailments.
     if ((forced == 0) && ((AI_CHK_ENALLHP(30) == 1) || (sMySpPct < 20) || (AI_CHK_ENHOJO(0x8000) == 1)))
     {
         return;
@@ -3121,9 +3017,6 @@ void ACT_Ailment(int forced)
     }
 }
 
-// ============================================================================
-// Action: Probe Unknown Enemy Affinities
-// ============================================================================
 void ACT_UnknownAttr()
 {
     int res;
@@ -3133,7 +3026,6 @@ void ACT_UnknownAttr()
         return;
     }
 
-    // Never waste an active Charge/Concentrate (0x0300) on a probe or probe into active enemy Karns (0xC000)!
     if ((AI_CHK_MYHOJO(0x0300) == 1) || (AI_CHK_ENHOJO(0xC000) == 1))
     {
         return;
@@ -3146,9 +3038,6 @@ void ACT_UnknownAttr()
     }
 }
 
-// ============================================================================
-// Action: Scripted Fixed Actions (Special Boss Encounters)
-// ============================================================================
 void ACT_Fixed()
 {
     int res;
@@ -3165,10 +3054,7 @@ void ACT_Fixed()
     }
 }
 
-// ============================================================================
-// Helper: Try Signature 3rd-Semester / High-Impact Physical Skills
-//   preferHighHp: 1 when Charged or bossing (hit Phys-weak or highest-HP foe instead of weak add!)
-// ============================================================================
+// minHeavyHp: HP% floor for heavy single-target Phys skills (298, 279); preferHighHp: 1 targets highest-HP foe instead of lowest.
 void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
 {
     int uid;
@@ -3259,10 +3145,7 @@ void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
     }
 }
 
-// ============================================================================
-// Helper: Try HP-Cost Gun Skills (Riot Gun / One-shot Kill / Triple Down / Double Shot / Snap)
-// Works even against flying Cognitive Wakaba (sNotPhysical == 1), Phys-immune foes, and with Charge!
-// ============================================================================
+// Gun skills (224..228) intentionally ignore sNotPhysical so allies can hit flying enemies.
 void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
 {
     int uid;
@@ -3368,10 +3251,8 @@ void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
     }
 }
 
-// ============================================================================
-// Action: Best Offensive Skill Selection (Charged/Concentrated/3rd-Sem/HighSkill)
-//   aggressive = 1 (Full Assault: Phys HP > 30%, Magic SP > 0%)
-// ============================================================================
+// aggressive: 0=Act Freely (HP>35%, SP>15%), 1=Full Assault (HP>30%, SP>0%).
+// AI_ACT_HIGHSKILL: 1=AoE Mag, 2=AoE Phys, 3=ST Mag, 4=ST Phys, 5=Magic fallback.
 void ACT_BestOffense(int aggressive)
 {
     int hpMin;
@@ -3404,7 +3285,6 @@ void ACT_BestOffense(int aggressive)
         magicFirst = 1;
     }
 
-    // 1. If Charged (0x0100): immediately cash in with strongest Physical or Gun skill!
     if ((AI_CHK_MYHOJO(0x0100) == 1) && (sLockMode != 1) && (sMyHpPct > 30))
     {
         if (sNotPhysical == 0)
@@ -3444,10 +3324,8 @@ void ACT_BestOffense(int aggressive)
         if (sActionDone != 0) { return; }
     }
 
-    // 2. If Concentrated (0x0200): immediately cash in with strongest Magic/Almighty skill!
     if ((AI_CHK_MYHOJO(0x0200) == 1) && (sLockMode != 2))
     {
-        // Akechi Rebellion Blade (297, 99 SP!): Almighty bypasses Makarakarn! Only on bosses or healthy foes in Full Assault!
         if ((AI_CHK_MYABLESKIL(297) == 1) && ((sIsBoss == 1) || ((aggressive == 1) && (sMySpPct >= 35) && (AI_CHK_ENALLHP(40) == 0))))
         {
             AI_ACT_SKILL(297);
@@ -3463,7 +3341,6 @@ void ACT_BestOffense(int aggressive)
             return;
         }
 
-        // Skip elemental Magic nukes into active enemy Makarakarn (0x8000) so allies never reflect-kill themselves!
         if (AI_CHK_ENHOJO(0x8000) == 0)
         {
             if ((sEnemyCount > 1) && (sIsUnstable == 0) && (sSingleOnlyFlag == 0))
@@ -3493,7 +3370,7 @@ void ACT_BestOffense(int aggressive)
         }
         else if ((sIsUnstable == 0) && ((sEnemyCount == 1) || (sSingleOnlyFlag == 0)))
         {
-            // Enemy Makarakarn (0x8000) active -> pierce it with Almighty AoE (Megidolaon 72 > Megidola 71 > Megido 70)!
+            // Almighty AoE (72/71/70) bypasses Makarakarn (0x8000).
             if (AI_CHK_MYABLESKIL(72) == 1) { AI_ACT_SKILL(72); AI_TAR_RND(); sActionDone = 10; return; }
             if (AI_CHK_MYABLESKIL(71) == 1) { AI_ACT_SKILL(71); AI_TAR_RND(); sActionDone = 10; return; }
             if (AI_CHK_MYABLESKIL(70) == 1) { AI_ACT_SKILL(70); AI_TAR_RND(); sActionDone = 10; return; }
@@ -3680,7 +3557,6 @@ void ACT_BestOffense(int aggressive)
         }
     }
 
-    // Almighty pierce through active enemy Makarakarn (0x8000) when elemental Magic was skipped
     if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 1) && (sIsUnstable == 0) && ((sEnemyCount == 1) || (sSingleOnlyFlag == 0)))
     {
         if (AI_CHK_MYABLESKIL(72) == 1) { AI_ACT_SKILL(72); AI_TAR_RND(); sActionDone = 10; return; }
@@ -3694,10 +3570,7 @@ void ACT_BestOffense(int aggressive)
     }
 }
 
-// ============================================================================
-// Action: Zero-SP HP-Cost Physical & Gun Skills (Conserve SP Rewrite!)
-//   drains HP down into emergency SP healing territory!
-// ============================================================================
+// Conserve SP HP-cost Phys/Gun: keep uncharged HP floor high (55%) so HP skills don't force SP healing.
 void ACT_PhysZeroSP()
 {
     int uid;
@@ -3844,9 +3717,6 @@ void ACT_PhysZeroSP()
     TryGunSkills(hpMin, heavyHpMin, preferHigh);
 }
 
-// ============================================================================
-// Action: Safe Fallback — Melee Attack (Avoiding Shock/Immune) or Guard
-// ============================================================================
 void ACT_AttackOrGuard()
 {
     int myAttr;
@@ -3911,10 +3781,9 @@ void ACT_AttackOrGuard()
 
     myAttr = AI_GET_MYATTRATTACK();
 
-    // If Charged (0x0100) reached fallback (low HP, Tetrakarn, Phys-immune, or Forgotten), skip basic melee
+    // Skip basic melee while Charged (0x0100) so fallback uses Gun/Magic/Guard and preserves the 2.5x buff.
     if (AI_CHK_MYHOJO(0x0100) == 0)
     {
-        // 1. Standing Phys-weak enemy for free melee 1 More (skip Shocked 0x04 & Tetrakarn 0x4000!)
         if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
         {
             uid = AI_GET_UNIWEAK_ST(myAttr);
@@ -3930,7 +3799,6 @@ void ACT_AttackOrGuard()
             }
         }
 
-        // 2. Frozen enemy (0x02) -> free single-target melee Technical shatter (skip if Tetrakarn 0x4000 is active!)
         if ((AI_CHK_ENBAD(0x02) == 1) && (AI_CHK_ENHOJO(0x4000) == 0))
         {
             AI_ACT_ATTACK();
