@@ -1022,7 +1022,7 @@ void ACT_Heal(int proactive)
         }
         if (AI_CHK_MYABLESKIL(307) == 1)
         {
-            if ((sIsBoss == 1) || (bestPct <= 55))
+            if (((sIsBoss == 1) && (bestPct <= 65)) || (bestPct <= 55))
             {
                 AI_ACT_SKILL(307);
                 AI_TAR_RND();
@@ -1032,7 +1032,7 @@ void ACT_Heal(int proactive)
         }
         if ((sLockMode != 7) && (AI_CHK_MYABLESKIL(318) == 1))
         {
-            if ((sIsBoss == 1) || (bestPct <= 50))
+            if (((sIsBoss == 1) && (bestPct <= 60)) || (bestPct <= 50))
             {
                 AI_ACT_SKILL(318);
                 AI_TAR_RND();
@@ -1511,7 +1511,7 @@ void ACT_ChargeConcentrate(int aggressive)
     }
 
     enemyHealthy = 0;
-    if (((sIsBoss == 1) && (AI_CHK_ENALLHP(15) == 0)) || ((sIsBoss == 0) && (AI_CHK_ENALLHP(50) == 0)))
+    if (((sIsBoss == 1) && (AI_CHK_ENALLHP(15) == 0)) || ((sIsBoss == 0) && (AI_CHK_ENALLHP(65) == 0)))
     {
         enemyHealthy = 1;
     }
@@ -1532,12 +1532,12 @@ void ACT_ChargeConcentrate(int aggressive)
     }
     else if (aggressive == 1)
     {
-        if (RND(100) < 50)
+        if (RND(100) < 30)
         {
             canUse = 1;
         }
     }
-    else if (RND(100) < 30)
+    else if (RND(100) < 15)
     {
         canUse = 1;
     }
@@ -1582,7 +1582,7 @@ void ACT_ChargeConcentrate(int aggressive)
 
     if ((physOk == 1) && (AI_CHK_MYABLESKIL(360) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
     {
-        if ((sMyHpPct > 40) && ((aggressive == 1) || (sMySpPct >= 20)))
+        if ((sMyHpPct > 40) && ((sIsBoss == 1) || ((aggressive == 1) && (sMySpPct >= 25)) || (sMySpPct >= 30)))
         {
             AI_ACT_SKILL(360);
             AI_TAR_MINE();
@@ -1593,7 +1593,7 @@ void ACT_ChargeConcentrate(int aggressive)
 
     if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(361) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
     {
-        if (((aggressive == 1) && (sMySpPct >= 15)) || (sMySpPct >= 25))
+        if (((sIsBoss == 1) && (sMySpPct >= 20)) || ((sIsBoss == 0) && (sMySpPct >= 35)))
         {
             AI_ACT_SKILL(361);
             AI_TAR_MINE();
@@ -2153,30 +2153,6 @@ void ACT_GunSmart()
         sActionDone = 10;
         return;
     }
-
-    uid = AI_GET_UNINOMALHPMIN(1);
-    if (uid != -1)
-    {
-        if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
-        {
-            AI_ACT_GUN();
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
-        }
-    }
-
-    uid = AI_GET_UNI_NOANALYZE(1);
-    if (uid != -1)
-    {
-        if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
-        {
-            AI_ACT_GUN();
-            AI_TAR_UID(uid);
-            sActionDone = 10;
-            return;
-        }
-    }
 }
 
 void ACT_UrgentDispel()
@@ -2323,10 +2299,23 @@ void ACT_Support(int guaranteed)
 {
     int allyId;
     int res;
+    int allowAoeSupport;
+    int allowSingleDebuff;
 
     if (sLockMode == 3)
     {
         return;
+    }
+
+    allowAoeSupport = 0;
+    if ((sIsBoss == 1) || ((sMySpPct >= 40) && (AI_CHK_ENALLHP(50) == 0)))
+    {
+        allowAoeSupport = 1;
+    }
+    allowSingleDebuff = 0;
+    if ((sIsBoss == 1) || ((sMySpPct >= 30) && (AI_CHK_ENALLHP(40) == 0)))
+    {
+        allowSingleDebuff = 1;
     }
 
     if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(292) == 1))
@@ -2359,21 +2348,21 @@ void ACT_Support(int guaranteed)
 
     if (AI_CHK_NOTENHOJO(0x20) == 1)
     {
-        if ((AI_CHK_MYABLESKIL(351) == 1) && (sEnemyCount >= 2))
+        if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(351) == 1) && (sEnemyCount >= 2))
         {
             AI_ACT_SKILL(351);
             AI_TAR_RND();
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(346) == 1)
+        if ((allowSingleDebuff == 1) && (AI_CHK_MYABLESKIL(346) == 1))
         {
             AI_ACT_SKILL(346);
             AI_TAR_NOTHOJO(0x20);
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(351) == 1)
+        if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(351) == 1))
         {
             AI_ACT_SKILL(351);
             AI_TAR_RND();
@@ -2384,21 +2373,21 @@ void ACT_Support(int guaranteed)
 
     if (AI_CHK_NOTENHOJO(0x02) == 1)
     {
-        if ((AI_CHK_MYABLESKIL(350) == 1) && (sEnemyCount >= 2))
+        if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(350) == 1) && (sEnemyCount >= 2))
         {
             AI_ACT_SKILL(350);
             AI_TAR_RND();
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(345) == 1)
+        if ((allowSingleDebuff == 1) && (AI_CHK_MYABLESKIL(345) == 1))
         {
             AI_ACT_SKILL(345);
             AI_TAR_NOTHOJO(0x02);
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(350) == 1)
+        if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(350) == 1))
         {
             AI_ACT_SKILL(350);
             AI_TAR_RND();
@@ -2409,21 +2398,21 @@ void ACT_Support(int guaranteed)
 
     if (AI_CHK_NOTENHOJO(0x08) == 1)
     {
-        if ((AI_CHK_MYABLESKIL(352) == 1) && (sEnemyCount >= 2))
+        if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(352) == 1) && (sEnemyCount >= 2))
         {
             AI_ACT_SKILL(352);
             AI_TAR_RND();
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(347) == 1)
+        if ((allowSingleDebuff == 1) && (AI_CHK_MYABLESKIL(347) == 1))
         {
             AI_ACT_SKILL(347);
             AI_TAR_NOTHOJO(0x08);
             sActionDone = 10;
             return;
         }
-        if (AI_CHK_MYABLESKIL(352) == 1)
+        if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(352) == 1))
         {
             AI_ACT_SKILL(352);
             AI_TAR_RND();
@@ -2448,7 +2437,7 @@ void ACT_Support(int guaranteed)
                 return;
             }
         }
-        if (AI_CHK_MYABLESKIL(343) == 1)
+        if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(343) == 1))
         {
             allyId = PickAllyWithoutHojo(0x01);
             if (allyId == 0) { allyId = PickAllyWithoutHojo(0x10); }
@@ -2468,7 +2457,7 @@ void ACT_Support(int guaranteed)
         allyId = PickAllyWithoutHojo(0x01);
         if (allyId != 0)
         {
-            if (AI_CHK_MYABLESKIL(340) == 1)
+            if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(340) == 1))
             {
                 AI_ACT_SKILL(340);
                 AI_TAR_RND();
@@ -2490,14 +2479,14 @@ void ACT_Support(int guaranteed)
         allyId = PickAllyWithoutHojo(0x10);
         if (allyId != 0)
         {
-            if (AI_CHK_MYABLESKIL(185) == 1)
+            if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(185) == 1))
             {
                 AI_ACT_SKILL(185);
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
             }
-            if (AI_CHK_MYABLESKIL(341) == 1)
+            if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(341) == 1))
             {
                 AI_ACT_SKILL(341);
                 AI_TAR_RND();
@@ -2519,14 +2508,14 @@ void ACT_Support(int guaranteed)
         allyId = PickAllyWithoutHojo(0x04);
         if (allyId != 0)
         {
-            if (AI_CHK_MYABLESKIL(188) == 1)
+            if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(188) == 1))
             {
                 AI_ACT_SKILL(188);
                 AI_TAR_RND();
                 sActionDone = 10;
                 return;
             }
-            if (AI_CHK_MYABLESKIL(342) == 1)
+            if ((allowAoeSupport == 1) && (AI_CHK_MYABLESKIL(342) == 1))
             {
                 AI_ACT_SKILL(342);
                 AI_TAR_RND();
@@ -3252,7 +3241,7 @@ void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
     }
 }
 
-// aggressive: 0=Act Freely (HP>35%, SP>15%), 1=Full Assault (HP>30%, SP>0%).
+// aggressive: 0=Act Freely (HP>35%, SP>15% or >0% for non-healers on bosses), 1=Full Assault (HP>30%, SP>0%).
 // AI_ACT_HIGHSKILL: 1=AoE Mag, 2=AoE Phys, 3=ST Mag, 4=ST Phys, 5=Magic fallback.
 void ACT_BestOffense(int aggressive)
 {
@@ -3277,7 +3266,14 @@ void ACT_BestOffense(int aggressive)
     {
         hpMin = 35;
         heavyHpMin = 40;
-        spMin = 15;
+        if ((sIsBoss == 1) && (sIsHealerChar == 0))
+        {
+            spMin = 0;
+        }
+        else
+        {
+            spMin = 15;
+        }
     }
 
     magicFirst = 0;
