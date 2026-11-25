@@ -10,7 +10,7 @@ If you like playing with Tactics (*Act Freely*, *Full Assault*, *Conserve SP*, *
 
 1. Install **Reloaded-II** and add `P5R.exe`.
 2. Make sure **Persona Essentials** (`p5rpc.modloader`) is installed and enabled.
-3. Place the `P5R_TacticsRewritten` folder into your Reloaded-II `Mods` folder.
+3. Place the `p5rpc.tacticsrewritten` folder into your Reloaded-II `Mods` folder.
 4. Enable **P5R Tactics Rewritten** in Reloaded-II and launch the game.
 
 ## What Each Tactic Does
