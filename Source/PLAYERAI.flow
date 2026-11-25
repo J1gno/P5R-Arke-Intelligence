@@ -1631,7 +1631,8 @@ void ACT_1MoreWeakness(int aggressive)
         return;
     }
 
-    if ((sLockMode != 1) && (AI_GET_BULLET() > 0))
+    // Preserve Charge (0x0100) rather than spending it on basic Gun or melee.
+    if ((sLockMode != 1) && (AI_CHK_MYHOJO(0x0100) == 0) && (AI_GET_BULLET() > 0))
     {
         uid = AI_GET_UNIWEAK_ST(1);
         if (uid != -1)
@@ -1656,7 +1657,6 @@ void ACT_1MoreWeakness(int aggressive)
         }
     }
 
-    // Preserve Charge (0x0100) rather than spending it on basic melee.
     if ((sLockMode != 1) && (sNotPhysical == 0) && (aggressive == 0) && (AI_CHK_MYHOJO(0x0100) == 0))
     {
         res = AI_GET_MYATTRATTACK();
@@ -2029,7 +2029,7 @@ void ACT_KillEnemy_Gun()
 {
     int uid;
 
-    if ((sLockMode == 1) || (sIsBoss == 1) || (AI_GET_BULLET() <= 0))
+    if ((sLockMode == 1) || (sIsBoss == 1) || (AI_CHK_MYHOJO(0x0100) == 1) || (AI_GET_BULLET() <= 0))
     {
         return;
     }
@@ -2071,7 +2071,7 @@ void ACT_GunWeakOrKill()
 {
     int uid;
 
-    if ((sLockMode == 1) || (sNo1MoreFlag == 1) || (AI_GET_BULLET() <= 0))
+    if ((sLockMode == 1) || (sNo1MoreFlag == 1) || (AI_CHK_MYHOJO(0x0100) == 1) || (AI_GET_BULLET() <= 0))
     {
         return;
     }
@@ -2103,7 +2103,7 @@ void ACT_GunSmart()
 {
     int uid;
 
-    if ((sLockMode == 1) || (sNo1MoreFlag == 1) || (AI_GET_BULLET() <= 0))
+    if ((sLockMode == 1) || (sNo1MoreFlag == 1) || (AI_CHK_MYHOJO(0x0100) == 1) || (AI_GET_BULLET() <= 0))
     {
         return;
     }
@@ -3725,7 +3725,7 @@ void ACT_AttackOrGuard()
 
     if ((sNotPhysical == 1) || (sLockMode == 1))
     {
-        if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
+        if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_CHK_MYHOJO(0x0100) == 0) && (AI_GET_BULLET() > 0))
         {
             uid = AI_GET_UNIWEAK(1);
             if (uid != -1)
@@ -3781,7 +3781,7 @@ void ACT_AttackOrGuard()
 
     myAttr = AI_GET_MYATTRATTACK();
 
-    // Skip basic melee while Charged (0x0100) so fallback uses Gun/Magic/Guard and preserves the 2.5x buff.
+    // Skip basic melee & Gun while Charged (0x0100) so fallback uses Magic/Guard and preserves the 2.5x buff.
     if (AI_CHK_MYHOJO(0x0100) == 0)
     {
         if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
@@ -3856,7 +3856,7 @@ void ACT_AttackOrGuard()
         }
     }
 
-    if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_GET_BULLET() > 0))
+    if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_CHK_MYHOJO(0x0100) == 0) && (AI_GET_BULLET() > 0))
     {
         uid = AI_GET_UNIWEAK(1);
         if (uid != -1)
