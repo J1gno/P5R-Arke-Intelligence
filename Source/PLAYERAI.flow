@@ -2929,10 +2929,11 @@ void ACT_SupportRefresh()
     }
     else
     {
-        pick = RND(numAvail - 1);
-        if (pick >= numAvail)
+        pick = RND(99);
+        pick = pick - ((pick / numAvail) * numAvail);
+        if ((pick < 0) || (pick >= numAvail))
         {
-            pick = numAvail - 1;
+            pick = 0;
         }
     }
 
