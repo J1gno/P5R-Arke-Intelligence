@@ -1,5 +1,5 @@
 {
-  "ModId": "p5rpc.gameplay.tacticsrewritten",
+  "ModId": "p5rpc.tacticsrewritten",
   "ModName": "P5R Tactics Rewritten",
   "ModAuthor": "J1gno",
   "ModVersion": "1.0.0",
@@ -19,7 +19,7 @@
   "CanUnload": null,
   "HasExports": null,
   "IsLibrary": false,
-  "ReleaseMetadataFileName": "p5rpc.gameplay.tacticsrewritten.ReleaseMetadata.json",
+  "ReleaseMetadataFileName": "p5rpc.tacticsrewritten.ReleaseMetadata.json",
   "IgnoreRegexes": [
     "^Source/.*",
     "^README\\.md$",
