@@ -53,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File .\Source\build.ps1 -CompilerPath "path\
 ## Credits & Acknowledgements
 
 - **[cold_spirit](https://gamebanana.com/members/3645866)**: Creator of the original [Arke Intelligence - Tactics Rewrite](https://gamebanana.com/mods/630268) for *Persona 3 Reload*, whose design philosophy, proactive support logic, and tactics rewrite inspired this Persona 5 Royal adaptation.
-- **J1gno**: Persona 5 Royal PC adaptation, FlowScript architecture, and rewrite.
+- **xeeoh**: Banner and icon art for the original mod (I used AI to modify it to replace Aigis with Joker and I don't intend to take full credit as they worked hard for that).
 - **[Atlus Script Tools](https://github.com/tge-was-taken/Atlus-Script-Tools)** by TGE and contributors.
 - **[Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II)** & **[Persona Essentials](https://github.com/Sewer56/p5rpc.modloader)** by Sewer56 and contributors.
 - **Atlus / SEGA**: Original creators of *Persona 5 Royal*.
