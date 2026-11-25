@@ -234,7 +234,7 @@ int IsAoESafeForAttr(int attr)
 
 int IsAoEGunSafe()
 {
-    if (sIsUnstable == 1)
+    if ((sEnemyCount > 1) && (sIsUnstable == 1))
     {
         return 0;
     }
@@ -1707,7 +1707,7 @@ void ACT_1MoreWeakness(int aggressive)
                     }
 
                     skill = AI_GET_UNIBESTATTRSKIL(uid, attr, singleOnly);
-                    if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+                    if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
                     {
                         skill = AI_GET_UNIBESTATTRSKIL(uid, attr, 0);
                     }
@@ -2630,15 +2630,15 @@ void ACT_Support(int guaranteed)
         if ((sIsBoss == 1) || ((AI_CHK_ENALLHP(40) == 0) && (sMySpPct >= 30)))
         {
             allyId = 0;
-            if (IsAllyCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x1000) == 0)  { allyId = 1; } }
+            if (IsAllyCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x3000) == 0)  { allyId = 1; } }
             if ((allyId == 0) && (sIsBoss == 1))
             {
-                if (IsAllyCapable(10) == 1) { if (AI_CHK_FRIDHOJO(10, 0x1000) == 0) { allyId = 10; } }
-                if ((allyId == 0) && (IsAllyCapable(2) == 1)) { if (AI_CHK_FRIDHOJO(2, 0x1000) == 0) { allyId = 2; } }
-                if ((allyId == 0) && (IsAllyCapable(5) == 1)) { if (AI_CHK_FRIDHOJO(5, 0x1000) == 0) { allyId = 5; } }
-                if ((allyId == 0) && (IsAllyCapable(3) == 1)) { if (AI_CHK_FRIDHOJO(3, 0x1000) == 0) { allyId = 3; } }
-                if ((allyId == 0) && (IsAllyCapable(9) == 1)) { if (AI_CHK_FRIDHOJO(9, 0x1000) == 0) { allyId = 9; } }
-                if ((allyId == 0) && (IsAllyCapable(7) == 1)) { if (AI_CHK_FRIDHOJO(7, 0x1000) == 0) { allyId = 7; } }
+                if (IsAllyCapable(10) == 1) { if (AI_CHK_FRIDHOJO(10, 0x3000) == 0) { allyId = 10; } }
+                if ((allyId == 0) && (IsAllyCapable(2) == 1)) { if (AI_CHK_FRIDHOJO(2, 0x3000) == 0) { allyId = 2; } }
+                if ((allyId == 0) && (IsAllyCapable(5) == 1)) { if (AI_CHK_FRIDHOJO(5, 0x3000) == 0) { allyId = 5; } }
+                if ((allyId == 0) && (IsAllyCapable(3) == 1)) { if (AI_CHK_FRIDHOJO(3, 0x3000) == 0) { allyId = 3; } }
+                if ((allyId == 0) && (IsAllyCapable(9) == 1)) { if (AI_CHK_FRIDHOJO(9, 0x3000) == 0) { allyId = 9; } }
+                if ((allyId == 0) && (IsAllyCapable(7) == 1)) { if (AI_CHK_FRIDHOJO(7, 0x3000) == 0) { allyId = 7; } }
             }
             if (allyId != 0)
             {
@@ -3368,7 +3368,7 @@ void ACT_BestOffense(int aggressive)
                 }
             }
         }
-        else if ((sIsUnstable == 0) && ((sEnemyCount == 1) || (sSingleOnlyFlag == 0)))
+        else if ((sEnemyCount == 1) || ((sIsUnstable == 0) && (sSingleOnlyFlag == 0)))
         {
             // Almighty AoE (72/71/70) bypasses Makarakarn (0x8000).
             if (AI_CHK_MYABLESKIL(72) == 1) { AI_ACT_SKILL(72); AI_TAR_RND(); sActionDone = 10; return; }
@@ -3407,7 +3407,7 @@ void ACT_BestOffense(int aggressive)
                     }
 
                     skill = AI_GET_UNIBESTATTRSKIL(uid, attr, singleOnly);
-                    if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+                    if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
                     {
                         skill = AI_GET_UNIBESTATTRSKIL(uid, attr, 0);
                     }
@@ -3557,7 +3557,7 @@ void ACT_BestOffense(int aggressive)
         }
     }
 
-    if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 1) && (sIsUnstable == 0) && ((sEnemyCount == 1) || (sSingleOnlyFlag == 0)))
+    if ((sLockMode != 2) && (sMySpPct > spMin) && (AI_CHK_ENHOJO(0x8000) == 1) && ((sEnemyCount == 1) || ((sIsUnstable == 0) && (sSingleOnlyFlag == 0))))
     {
         if (AI_CHK_MYABLESKIL(72) == 1) { AI_ACT_SKILL(72); AI_TAR_RND(); sActionDone = 10; return; }
         if (AI_CHK_MYABLESKIL(71) == 1) { AI_ACT_SKILL(71); AI_TAR_RND(); sActionDone = 10; return; }
@@ -3629,7 +3629,7 @@ void ACT_PhysZeroSP()
         {
             if (IsAoESafeForAttr(1) == 1) { singleOnly = 0; } else { singleOnly = 1; }
             skill = AI_GET_UNIBESTATTRSKIL(uid, 1, singleOnly);
-            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
             {
                 skill = AI_GET_UNIBESTATTRSKIL(uid, 1, 0);
             }
@@ -3659,7 +3659,7 @@ void ACT_PhysZeroSP()
         {
             if (IsAoESafeForAttr(0) == 1) { singleOnly = 0; } else { singleOnly = 1; }
             skill = AI_GET_UNIBESTATTRSKIL(uid, 0, singleOnly);
-            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1) && (sIsUnstable == 0))
+            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
             {
                 skill = AI_GET_UNIBESTATTRSKIL(uid, 0, 0);
             }
