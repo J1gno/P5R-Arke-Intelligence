@@ -429,7 +429,7 @@ void AI_pattern_Free()
 
     if (AI_CHK_MYHOJO(0x0300) == 0)
     {
-        if ((sIsBoss == 1) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
+        if (((sIsBoss == 1) && ((sIsHealerChar == 0) || (sMySpPct >= 15))) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
         {
             roll = RND(100);
             if ((roll < 25) || ((sIsSupportChar == 1) && (roll < 40)) || ((sIsBoss == 1) && (roll < 45)))
@@ -462,7 +462,7 @@ void AI_pattern_Free()
     ACT_GunSmart();
     if (sActionDone != 0) { return; }
 
-    if ((sIsBoss == 1) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
+    if (((sIsBoss == 1) && ((sIsHealerChar == 0) || (sMySpPct >= 15))) || ((sMySpPct >= 25) && (AI_CHK_ENALLHP(30) == 0)))
     {
         ACT_Support(0);
         if (sActionDone != 0) { return; }
@@ -2259,11 +2259,11 @@ int PickChargeAlly()
 {
     int uid;
     if (IsAllySkillCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x0100) == 0)  { return 1; } }
-    if (IsAllySkillCapable(2) == 1)  { uid = AI_GET_UNI(0, 2);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(2, 35) == 0)  && (AI_CHK_FRIDHOJO(2, 0x0100) == 0))  { return 2; } } }
-    if (IsAllySkillCapable(10) == 1) { uid = AI_GET_UNI(0, 10); if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(10, 35) == 0) && (AI_CHK_FRIDHOJO(10, 0x0100) == 0)) { return 10; } } }
-    if (IsAllySkillCapable(5) == 1)  { uid = AI_GET_UNI(0, 5);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(5, 35) == 0)  && (AI_CHK_FRIDHOJO(5, 0x0100) == 0))  { return 5; } } }
-    if (IsAllySkillCapable(9) == 1)  { uid = AI_GET_UNI(0, 9);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(9, 35) == 0)  && (AI_CHK_FRIDHOJO(9, 0x0100) == 0))  { return 9; } } }
-    if (IsAllySkillCapable(7) == 1)  { uid = AI_GET_UNI(0, 7);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(7, 35) == 0)  && (AI_CHK_FRIDHOJO(7, 0x0100) == 0))  { return 7; } } }
+    if (IsAllySkillCapable(2) == 1)  { uid = AI_GET_UNI(0, 2);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(2, 40) == 0)  && (AI_CHK_FRIDHOJO(2, 0x0100) == 0))  { return 2; } } }
+    if (IsAllySkillCapable(10) == 1) { uid = AI_GET_UNI(0, 10); if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(10, 40) == 0) && (AI_CHK_FRIDHOJO(10, 0x0100) == 0)) { return 10; } } }
+    if (IsAllySkillCapable(5) == 1)  { uid = AI_GET_UNI(0, 5);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(5, 40) == 0)  && (AI_CHK_FRIDHOJO(5, 0x0100) == 0))  { return 5; } } }
+    if (IsAllySkillCapable(9) == 1)  { uid = AI_GET_UNI(0, 9);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(9, 40) == 0)  && (AI_CHK_FRIDHOJO(9, 0x0100) == 0))  { return 9; } } }
+    if (IsAllySkillCapable(7) == 1)  { uid = AI_GET_UNI(0, 7);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(7, 40) == 0)  && (AI_CHK_FRIDHOJO(7, 0x0100) == 0))  { return 7; } } }
     return 0;
 }
 
