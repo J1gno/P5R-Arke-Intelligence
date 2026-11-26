@@ -1560,7 +1560,8 @@ void ACT_CureAilment(int critOnly)
         return;
     }
 
-    if (critOnly == 1)
+    // Restrict to incapacitating ailments (0x0F3E) during 1-More or on nearly-dead non-boss trash packs (<=25% HP).
+    if ((critOnly == 1) || ((sIsBoss == 0) && (AI_CHK_ENALLHP(25) == 1)))
     {
         elemMask = 0x0006;   // Freeze | Shock
         patraMask = 0x0108;  // Dizzy | Sleep
@@ -1803,7 +1804,7 @@ void ACT_CureAilment(int critOnly)
         }
     }
 
-    if ((critOnly == 0) && (AI_CHK_ENID(222) == 0) && (AI_CHK_ENID(478) == 0) && (sLockMode != 3) && (AI_CHK_MYABLESKIL(318) == 0))
+    if ((critOnly == 0) && ((sIsBoss == 1) || (AI_CHK_ENALLHP(25) == 0)) && (AI_CHK_ENID(222) == 0) && (AI_CHK_ENID(478) == 0) && (sLockMode != 3) && (AI_CHK_MYABLESKIL(318) == 0))
     {
         res = AI_ACT_BADSTATE();
         if (res != -1)
@@ -3564,7 +3565,12 @@ void ACT_UnknownAttr()
         return;
     }
 
-    if ((sOrder == 0) && (sIsHealerChar == 1) && (sMySpPct <= 15))
+    if ((sOrder == 0) && ((sIsBoss == 0) || (sIsHealerChar == 1)) && (sMySpPct <= 15))
+    {
+        return;
+    }
+
+    if ((sIsBoss == 0) && (sIsHouma == 0) && (AI_CHK_ENALLHP(25) == 1))
     {
         return;
     }
