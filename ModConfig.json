@@ -2,7 +2,7 @@
   "ModId": "p5rpc.tacticsrewritten",
   "ModName": "P5R Tactics Rewritten",
   "ModAuthor": "J1gno",
-  "ModVersion": "1.0.1",
+  "ModVersion": "1.0.2",
   "ModDescription": "Overhauls P5R's Tactics AI so teammates fight smarter and use their full skill kits. Based on cold_spirit's Arke Intelligence mod for P3R.",
   "ModDll": "",
   "ModIcon": "Preview.png",
