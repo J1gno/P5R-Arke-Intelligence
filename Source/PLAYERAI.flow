@@ -1561,7 +1561,7 @@ void ACT_ChargeConcentrate(int aggressive)
     // 290=Fighting Spirit / 360=Charge (HOJO 0x0100); 294=High Energy / 361=Concentrate (HOJO 0x0200)
     if ((physOk == 1) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MYABLESKIL(290) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
     {
-        if (CountCapableWithoutHojo(0x0100) >= 2)
+        if ((CountCapableWithoutHojo(0x0100) >= 3) || ((AI_CHK_MYABLESKIL(360) == 0) && (CountCapableWithoutHojo(0x0100) >= 2)))
         {
             AI_ACT_SKILL(290);
             AI_TAR_RND();
@@ -1572,7 +1572,7 @@ void ACT_ChargeConcentrate(int aggressive)
 
     if ((sLockMode != 2) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MYABLESKIL(294) == 1) && (AI_CHK_NOTMYHOJO(0x0200) == 1))
     {
-        if (CountCapableWithoutHojo(0x0200) >= 2)
+        if ((CountCapableWithoutHojo(0x0200) >= 3) || ((AI_CHK_MYABLESKIL(361) == 0) && (CountCapableWithoutHojo(0x0200) >= 2)))
         {
             AI_ACT_SKILL(294);
             AI_TAR_RND();
@@ -1682,7 +1682,7 @@ void ACT_1MoreWeakness(int aggressive)
         {
             skipAttr = 1;
         }
-        if ((attr >= 2) && ((sLockMode == 2) || ((sOrder == 3) && (sMySpPct < 15))))
+        if ((attr >= 2) && ((sLockMode == 2) || ((sOrder == 3) && (sMySpPct < 25)) || ((sOrder == 0) && (sIsHealerChar == 1) && (sMySpPct <= 15))))
         {
             skipAttr = 1;
         }
@@ -1698,7 +1698,7 @@ void ACT_1MoreWeakness(int aggressive)
             {
                 if ((AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) && (((attr <= 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0)) || ((attr >= 2) && (AI_CHK_UNIHOJO(uid, 0x8000) == 0))))
                 {
-                    if (IsAoESafeForAttr(attr) == 1)
+                    if ((sOrder != 3) && (IsAoESafeForAttr(attr) == 1))
                     {
                         singleOnly = 0;
                     }
@@ -1708,7 +1708,7 @@ void ACT_1MoreWeakness(int aggressive)
                     }
 
                     skill = AI_GET_UNIBESTATTRSKIL(uid, attr, singleOnly);
-                    if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
+                    if ((skill <= 0) && (singleOnly == 1) && ((sEnemyCount == 1) || (IsAoESafeForAttr(attr) == 1)))
                     {
                         skill = AI_GET_UNIBESTATTRSKIL(uid, attr, 0);
                     }
@@ -2591,7 +2591,7 @@ void ACT_Support(int guaranteed)
         {
             if ((sEnemyCount > 1) || (IsAttrKnownImmune(0) == 0))
             {
-                if (CountCapableWithoutHojo(0x0100) >= 2)
+                if ((CountCapableWithoutHojo(0x0100) >= 3) || ((AI_CHK_MYABLESKIL(360) == 0) && (CountCapableWithoutHojo(0x0100) >= 2)))
                 {
                     AI_ACT_SKILL(290);
                     AI_TAR_RND();
@@ -2602,7 +2602,7 @@ void ACT_Support(int guaranteed)
         }
         if ((sLockMode != 2) && (AI_CHK_MYUSESKIL(294) == 0) && (AI_CHK_MYABLESKIL(294) == 1))
         {
-            if (CountCapableWithoutHojo(0x0200) >= 2)
+            if ((CountCapableWithoutHojo(0x0200) >= 3) || ((AI_CHK_MYABLESKIL(361) == 0) && (CountCapableWithoutHojo(0x0200) >= 2)))
             {
                 AI_ACT_SKILL(294);
                 AI_TAR_RND();
@@ -3756,7 +3756,7 @@ void ACT_AttackOrGuard()
 
     if ((sNotPhysical == 1) || (sLockMode == 1))
     {
-        if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_CHK_MYHOJO(0x0100) == 0) && (AI_GET_BULLET() > 0))
+        if ((sLockMode != 1) && (sNo1MoreFlag == 0) && ((sOrder == 3) || (AI_CHK_MYHOJO(0x0100) == 0)) && (AI_GET_BULLET() > 0))
         {
             uid = AI_GET_UNIWEAK(1);
             if (uid != -1)
@@ -3819,8 +3819,8 @@ void ACT_AttackOrGuard()
 
     myAttr = AI_GET_MYATTRATTACK();
 
-    // Skip basic melee & Gun while Charged (0x0100) so fallback uses Magic/Guard and preserves the 2.5x buff.
-    if (AI_CHK_MYHOJO(0x0100) == 0)
+    // Skip basic melee & Gun while Charged (0x0100) so attackers preserve the 2.5x buff; Heal/Support spends stray Charge.
+    if ((sOrder == 3) || (AI_CHK_MYHOJO(0x0100) == 0))
     {
         if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
         {
@@ -3894,7 +3894,7 @@ void ACT_AttackOrGuard()
         }
     }
 
-    if ((sLockMode != 1) && (sNo1MoreFlag == 0) && (AI_CHK_MYHOJO(0x0100) == 0) && (AI_GET_BULLET() > 0))
+    if ((sLockMode != 1) && (sNo1MoreFlag == 0) && ((sOrder == 3) || (AI_CHK_MYHOJO(0x0100) == 0)) && (AI_GET_BULLET() > 0))
     {
         uid = AI_GET_UNIWEAK(1);
         if (uid != -1)
