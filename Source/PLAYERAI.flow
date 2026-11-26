@@ -1852,7 +1852,7 @@ void ACT_Takeover()
                     if (targetUid != -1)
                     {
                         targetOrder = AI_GET_P_ORDER(targetUid);
-                        if ((targetOrder == 0) || (targetOrder == 3))
+                        if (targetOrder != 1)
                         {
                             AI_ACT_TAKEOVER(3);
                             sActionDone = 10;
@@ -2348,7 +2348,7 @@ void ACT_Support(int guaranteed)
         allowSingleDebuff = 1;
     }
 
-    if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(292) == 1))
+    if ((sIsBoss == 1) && (AI_CHK_ENALLHP(10) == 0) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(292) == 1))
     {
         if ((sEnemyCount >= 2) || (AI_CHK_MYABLESKIL(348) == 0))
         {
@@ -2453,7 +2453,7 @@ void ACT_Support(int guaranteed)
 
     if ((AI_CHK_MYABLESKIL(293) == 1) || (AI_CHK_MYABLESKIL(343) == 1))
     {
-        if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(293) == 1))
+        if ((sIsBoss == 1) && (AI_CHK_ENALLHP(10) == 0) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(293) == 1))
         {
             res = 0;
             if (PickAllyWithoutHojo(0x01) != 0) { res = res + 1; }
@@ -2585,9 +2585,9 @@ void ACT_Support(int guaranteed)
         }
     }
 
-    if ((guaranteed == 1) && (sIsBoss == 1) && (sMySpPct >= 35) && (AI_CHK_MORE() == 0))
+    if ((guaranteed == 1) && (sIsBoss == 1) && (AI_CHK_ENALLHP(15) == 0) && (sMySpPct >= 35) && (AI_CHK_MORE() == 0))
     {
-        if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYABLESKIL(290) == 1))
+        if ((sNotPhysical == 0) && (sLockMode != 1) && (AI_CHK_MYUSESKIL(290) == 0) && (AI_CHK_MYABLESKIL(290) == 1))
         {
             if ((sEnemyCount > 1) || (IsAttrKnownImmune(0) == 0))
             {
@@ -2600,7 +2600,7 @@ void ACT_Support(int guaranteed)
                 }
             }
         }
-        if ((sLockMode != 2) && (AI_CHK_MYABLESKIL(294) == 1))
+        if ((sLockMode != 2) && (AI_CHK_MYUSESKIL(294) == 0) && (AI_CHK_MYABLESKIL(294) == 1))
         {
             if (CountCapableWithoutHojo(0x0200) >= 2)
             {
@@ -2670,7 +2670,7 @@ void ACT_Support(int guaranteed)
     }
 
     // Skip Karn/drain shields (296/184/370/371) vs Enemy ID 190 (triggers infinite repel-punish Megidolaon loop); 372=Tetraja (0x02000000).
-    if ((sIsBoss == 1) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(296) == 1))
+    if ((sIsBoss == 1) && (AI_CHK_ENALLHP(10) == 0) && (sMySpPct >= 30) && (AI_CHK_MYABLESKIL(296) == 1))
     {
         if ((AI_CHK_ENID(190) == 0) && (AI_CHK_FRHOJO(0xC000) == 0))
         {
@@ -3079,68 +3079,71 @@ void TrySignaturePhysSkills(int allowAoE, int minHeavyHp, int preferHighHp)
         return;
     }
 
-    if ((sMyHpPct > minHeavyHp) && (AI_CHK_MYABLESKIL(298) == 1))
+    if ((sIsBoss == 1) || (sEnemyCount == 1) || (sIsUnstable == 1) || (sSingleOnlyFlag == 1))
     {
-        uid = AI_GET_UNIWEAK(0);
-        if (uid != -1)
+        if ((sMyHpPct > minHeavyHp) && (AI_CHK_MYABLESKIL(298) == 1))
         {
-            if (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 0)
+            uid = AI_GET_UNIWEAK(0);
+            if (uid != -1)
             {
-                uid = -1;
-            }
-        }
-        if (uid == -1)
-        {
-            if (preferHighHp == 1)
-            {
-                uid = AI_GET_UNINOMALLVMAXHPMAX(0);
+                if (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 0)
+                {
+                    uid = -1;
+                }
             }
             if (uid == -1)
             {
-                uid = AI_GET_UNINOMALHPMIN(0);
+                if (preferHighHp == 1)
+                {
+                    uid = AI_GET_UNINOMALLVMAXHPMAX(0);
+                }
+                if (uid == -1)
+                {
+                    uid = AI_GET_UNINOMALHPMIN(0);
+                }
             }
-        }
-        if (uid != -1)
-        {
-            if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+            if (uid != -1)
             {
-                AI_ACT_SKILL(298);
-                AI_TAR_UID(uid);
-                sActionDone = 10;
-                return;
+                if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+                {
+                    AI_ACT_SKILL(298);
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
             }
         }
-    }
 
-    if ((sMyHpPct > minHeavyHp) && (AI_CHK_MYABLESKIL(279) == 1))
-    {
-        uid = AI_GET_UNIWEAK(0);
-        if (uid != -1)
+        if ((sMyHpPct > minHeavyHp) && (AI_CHK_MYABLESKIL(279) == 1))
         {
-            if (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 0)
+            uid = AI_GET_UNIWEAK(0);
+            if (uid != -1)
             {
-                uid = -1;
-            }
-        }
-        if (uid == -1)
-        {
-            if (preferHighHp == 1)
-            {
-                uid = AI_GET_UNINOMALLVMAXHPMAX(0);
+                if (AI_CHK_UNIANALYZE_OPEN(uid, 0) == 0)
+                {
+                    uid = -1;
+                }
             }
             if (uid == -1)
             {
-                uid = AI_GET_UNINOMALHPMIN(0);
+                if (preferHighHp == 1)
+                {
+                    uid = AI_GET_UNINOMALLVMAXHPMAX(0);
+                }
+                if (uid == -1)
+                {
+                    uid = AI_GET_UNINOMALHPMIN(0);
+                }
             }
-        }
-        if (uid != -1)
-        {
-            if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+            if (uid != -1)
             {
-                AI_ACT_SKILL(279);
-                AI_TAR_UID(uid);
-                sActionDone = 10;
-                return;
+                if (AI_CHK_UNIHOJO(uid, 0x4000) == 0)
+                {
+                    AI_ACT_SKILL(279);
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
             }
         }
     }
@@ -3644,23 +3647,26 @@ void ACT_PhysZeroSP()
         return;
     }
 
-    uid = AI_GET_UNIWEAK_ST(1);
-    if (uid != -1)
+    if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
     {
-        if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
+        uid = AI_GET_UNIWEAK_ST(1);
+        if (uid != -1)
         {
-            if (IsAoESafeForAttr(1) == 1) { singleOnly = 0; } else { singleOnly = 1; }
-            skill = AI_GET_UNIBESTATTRSKIL(uid, 1, singleOnly);
-            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, 1) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
-                skill = AI_GET_UNIBESTATTRSKIL(uid, 1, 0);
-            }
-            if (skill > 0)
-            {
-                sTargetUid = uid;
-                sSkillId = skill;
-                sActionDone = 1;
-                return;
+                if (IsAoESafeForAttr(1) == 1) { singleOnly = 0; } else { singleOnly = 1; }
+                skill = AI_GET_UNIBESTATTRSKIL(uid, 1, singleOnly);
+                if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
+                {
+                    skill = AI_GET_UNIBESTATTRSKIL(uid, 1, 0);
+                }
+                if (skill > 0)
+                {
+                    sTargetUid = uid;
+                    sSkillId = skill;
+                    sActionDone = 1;
+                    return;
+                }
             }
         }
     }
@@ -3674,23 +3680,26 @@ void ACT_PhysZeroSP()
         return;
     }
 
-    uid = AI_GET_UNIWEAK_ST(0);
-    if (uid != -1)
+    if ((sNo1MoreFlag == 0) && (sDownCount < sEnemyCount))
     {
-        if ((AI_CHK_UNIANALYZE_OPEN(uid, 0) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
+        uid = AI_GET_UNIWEAK_ST(0);
+        if (uid != -1)
         {
-            if (IsAoESafeForAttr(0) == 1) { singleOnly = 0; } else { singleOnly = 1; }
-            skill = AI_GET_UNIBESTATTRSKIL(uid, 0, singleOnly);
-            if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
+            if ((AI_CHK_UNIANALYZE_OPEN(uid, 0) == 1) && (AI_CHK_UNIHOJO(uid, 0x4000) == 0))
             {
-                skill = AI_GET_UNIBESTATTRSKIL(uid, 0, 0);
-            }
-            if (skill > 0)
-            {
-                sTargetUid = uid;
-                sSkillId = skill;
-                sActionDone = 1;
-                return;
+                if (IsAoESafeForAttr(0) == 1) { singleOnly = 0; } else { singleOnly = 1; }
+                skill = AI_GET_UNIBESTATTRSKIL(uid, 0, singleOnly);
+                if ((skill <= 0) && (singleOnly == 1) && (sEnemyCount == 1))
+                {
+                    skill = AI_GET_UNIBESTATTRSKIL(uid, 0, 0);
+                }
+                if (skill > 0)
+                {
+                    sTargetUid = uid;
+                    sSkillId = skill;
+                    sActionDone = 1;
+                    return;
+                }
             }
         }
     }
