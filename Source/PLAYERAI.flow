@@ -26,6 +26,8 @@ int sEnemyCount;
 int sDownCount;
 int sIsHealerChar;
 int sIsSupportChar;
+int sHoldCharge;      // Cached once per turn (1 if holding usable Charge 0x0100)
+int sHoldConc;        // Cached once per turn (1 if holding usable Concentrate 0x0200)
 
 // Procedure Index 0: Engine Entry Point (MUST remain index 0)
 void main_AI_routine()
@@ -88,7 +90,7 @@ void main_AI_routine()
         {
             return;
         }
-        if (AI_CHK_MORE() == 1)
+        if ((AI_CHK_MORE() == 1) && ((sIsBoss == 0) || (sEnemyCount > 1)))
         {
             ACT_Showtime(0);
             if (sActionDone != 0)
@@ -99,6 +101,8 @@ void main_AI_routine()
         ACT_AttackOrGuard();
         return;
     }
+
+    InitRoleAndBuffCache();
 
     if (sOrder == 0)
     {
@@ -289,7 +293,7 @@ int HasUsableOffensiveMagic()
 }
 
 // Preserve Charge (0x0100) only if this actor can realistically spend it on a Phys/Gun skill (prevents Guard softlocks & mage poisoning).
-int ShouldHoldCharge()
+int ComputeShouldHoldCharge()
 {
     int canHitPhys;
     int canHitGun;
@@ -332,7 +336,7 @@ int ShouldHoldCharge()
 }
 
 // Preserve Concentrate (0x0200) only if this actor can realistically spend it on a Magic/Almighty skill.
-int ShouldHoldConcentrate()
+int ComputeShouldHoldConcentrate()
 {
     if (AI_CHK_MYHOJO(0x0200) == 0)
     {
@@ -357,9 +361,19 @@ int ShouldHoldConcentrate()
     return 1;
 }
 
+int ShouldHoldCharge()
+{
+    return sHoldCharge;
+}
+
+int ShouldHoldConcentrate()
+{
+    return sHoldConc;
+}
+
 int IsHoldingUsableChargeOrConc()
 {
-    if ((ShouldHoldCharge() == 1) || (ShouldHoldConcentrate() == 1))
+    if ((sHoldCharge == 1) || (sHoldConc == 1))
     {
         return 1;
     }
@@ -619,24 +633,45 @@ void Initialize()
     sNoFinishFlag = BIT_CHK(805306368 + 454);
     sAilmentPrioFlag = BIT_CHK(805306368 + 451);
 
-    // Dynamically detect dedicated healer/support roles from the actor's actual usable skills (including accessories & Jazz Club skills).
     sIsHealerChar = 0;
-    if ((AI_CHK_MYABLESKIL(305) == 1) || (AI_CHK_MYABLESKIL(306) == 1) || (AI_CHK_MYABLESKIL(307) == 1) || (AI_CHK_MYABLESKIL(318) == 1) || (AI_CHK_MYABLESKIL(310) == 1) || (AI_CHK_MYABLESKIL(311) == 1) || (AI_CHK_MYABLESKIL(214) == 1))
-    {
-        sIsHealerChar = 1;
-    }
-    else if (((sMyCharId == 3) || (sMyCharId == 6)) && ((AI_CHK_MYABLESKIL(300) == 1) || (AI_CHK_MYABLESKIL(301) == 1) || (AI_CHK_MYABLESKIL(302) == 1) || (AI_CHK_MYABLESKIL(183) == 1)))
-    {
-        sIsHealerChar = 1;
-    }
-
     sIsSupportChar = 0;
-    if ((AI_CHK_MYABLESKIL(292) == 1) || (AI_CHK_MYABLESKIL(293) == 1) || (AI_CHK_MYABLESKIL(296) == 1) || (AI_CHK_MYABLESKIL(348) == 1) || (AI_CHK_MYABLESKIL(343) == 1) || (AI_CHK_MYABLESKIL(338) == 1) || (AI_CHK_MYABLESKIL(340) == 1) || (AI_CHK_MYABLESKIL(341) == 1) || (AI_CHK_MYABLESKIL(342) == 1) || (AI_CHK_MYABLESKIL(350) == 1) || (AI_CHK_MYABLESKIL(351) == 1) || (AI_CHK_MYABLESKIL(352) == 1) || (AI_CHK_MYABLESKIL(335) == 1) || (AI_CHK_MYABLESKIL(336) == 1) || (AI_CHK_MYABLESKIL(337) == 1) || (AI_CHK_MYABLESKIL(345) == 1) || (AI_CHK_MYABLESKIL(346) == 1) || (AI_CHK_MYABLESKIL(347) == 1) || (AI_CHK_MYABLESKIL(303) == 1) || (AI_CHK_MYABLESKIL(184) == 1) || (AI_CHK_MYABLESKIL(185) == 1) || (AI_CHK_MYABLESKIL(187) == 1) || (AI_CHK_MYABLESKIL(188) == 1) || (AI_CHK_MYABLESKIL(189) == 1))
-    {
-        sIsSupportChar = 1;
-    }
+    sHoldCharge = 0;
+    sHoldConc = 0;
 
     AI_ACT_SKILL(0);
+}
+
+// Runs after Exception/Mouse/Forget early returns so unused skill checks never run on restricted turns, and caches Charge/Concentrate hold flags once per turn.
+void InitRoleAndBuffCache()
+{
+    if ((sOrder == 0) || (sOrder == 1) || (sOrder == 3))
+    {
+        if ((AI_CHK_MYABLESKIL(305) == 1) || (AI_CHK_MYABLESKIL(306) == 1) || (AI_CHK_MYABLESKIL(307) == 1) || (AI_CHK_MYABLESKIL(318) == 1) || (AI_CHK_MYABLESKIL(310) == 1) || (AI_CHK_MYABLESKIL(311) == 1) || (AI_CHK_MYABLESKIL(214) == 1))
+        {
+            sIsHealerChar = 1;
+        }
+        else if (((sMyCharId == 3) || (sMyCharId == 6)) && ((AI_CHK_MYABLESKIL(300) == 1) || (AI_CHK_MYABLESKIL(301) == 1) || (AI_CHK_MYABLESKIL(302) == 1) || (AI_CHK_MYABLESKIL(183) == 1)))
+        {
+            sIsHealerChar = 1;
+        }
+    }
+
+    if (sOrder == 0)
+    {
+        if ((AI_CHK_MYABLESKIL(292) == 1) || (AI_CHK_MYABLESKIL(293) == 1) || (AI_CHK_MYABLESKIL(296) == 1) || (AI_CHK_MYABLESKIL(348) == 1) || (AI_CHK_MYABLESKIL(343) == 1) || (AI_CHK_MYABLESKIL(338) == 1) || (AI_CHK_MYABLESKIL(340) == 1) || (AI_CHK_MYABLESKIL(341) == 1) || (AI_CHK_MYABLESKIL(342) == 1) || (AI_CHK_MYABLESKIL(350) == 1) || (AI_CHK_MYABLESKIL(351) == 1) || (AI_CHK_MYABLESKIL(352) == 1) || (AI_CHK_MYABLESKIL(335) == 1) || (AI_CHK_MYABLESKIL(336) == 1) || (AI_CHK_MYABLESKIL(337) == 1) || (AI_CHK_MYABLESKIL(345) == 1) || (AI_CHK_MYABLESKIL(346) == 1) || (AI_CHK_MYABLESKIL(347) == 1) || (AI_CHK_MYABLESKIL(303) == 1) || (AI_CHK_MYABLESKIL(184) == 1) || (AI_CHK_MYABLESKIL(185) == 1) || (AI_CHK_MYABLESKIL(187) == 1) || (AI_CHK_MYABLESKIL(188) == 1) || (AI_CHK_MYABLESKIL(189) == 1))
+        {
+            sIsSupportChar = 1;
+        }
+    }
+
+    if ((sOrder != 3) && (AI_CHK_MYHOJO(0x0100) == 1))
+    {
+        sHoldCharge = ComputeShouldHoldCharge();
+    }
+    if ((sOrder != 2) && (sOrder != 3) && (AI_CHK_MYHOJO(0x0200) == 1))
+    {
+        sHoldConc = ComputeShouldHoldConcentrate();
+    }
 }
 
 // Tactic 0: Act Freely
@@ -686,8 +721,11 @@ void AI_pattern_Free()
 
     if (AI_CHK_MORE() == 1)
     {
-        ACT_Showtime(0);
-        if (sActionDone != 0) { return; }
+        if ((sIsBoss == 0) || (sEnemyCount > 1))
+        {
+            ACT_Showtime(0);
+            if (sActionDone != 0) { return; }
+        }
         ACT_Heal(0);
         if (sActionDone != 0) { return; }
         ACT_CureAilment(0);
@@ -783,7 +821,7 @@ void AI_pattern_Damage()
     ACT_Takeover();
     if (sActionDone != 0) { return; }
 
-    if (AI_CHK_MORE() == 1)
+    if ((AI_CHK_MORE() == 1) && ((sIsBoss == 0) || (sEnemyCount > 1)))
     {
         ACT_Showtime(1);
         if (sActionDone != 0) { return; }
@@ -840,7 +878,7 @@ void AI_pattern_SaveSP()
     ACT_Takeover();
     if (sActionDone != 0) { return; }
 
-    if (AI_CHK_MORE() == 1)
+    if ((AI_CHK_MORE() == 1) && ((sIsBoss == 0) || (sEnemyCount > 1)))
     {
         ACT_Showtime(0);
         if (sActionDone != 0) { return; }
@@ -900,7 +938,7 @@ void AI_pattern_SaveHP()
     ACT_Takeover();
     if (sActionDone != 0) { return; }
 
-    if (AI_CHK_MORE() == 1)
+    if ((AI_CHK_MORE() == 1) && ((sIsBoss == 0) || (sEnemyCount > 1)))
     {
         ACT_Showtime(0);
         if (sActionDone != 0) { return; }
@@ -1007,7 +1045,7 @@ void ACT_Showtime(int aggressive)
         return;
     }
 
-    if (((sIsBoss == 1) && (AI_CHK_ENALLHP(10) == 0)) || (sIsUnstable == 1) || ((aggressive == 1) && (AI_CHK_ENALLHP(35) == 0)) || ((AI_CHK_FRHP(40) == 1) && (AI_CHK_ENALLHP(35) == 0)) || ((sEnemyCount >= 2) && (AI_CHK_ENALLHP(65) == 0) && (RND(100) < 50)))
+    if (((sIsBoss == 1) && (AI_CHK_ENALLHP(10) == 0)) || (sIsUnstable == 1) || ((aggressive == 1) && (AI_CHK_ENALLHP(35) == 0)) || ((AI_CHK_FRHP(40) == 1) && (AI_CHK_ENALLHP(35) == 0)) || (AI_CHK_ENALLHP(50) == 0))
     {
         AI_ACT_SP_ATTACK();
         if (sIsUnstable == 1)
@@ -2516,7 +2554,7 @@ void ACT_Takeover()
         // Prioritize Charged/Concentrated Joker before matching-archetype allies so stray party buffs don't route to wrong roles.
         if ((IsAllySkillCapable(1) == 1) && (AI_CHK_TAKEOVER(1) == 1))
         {
-            if (((sNotPhysical == 0) && (sLockMode != 1) && (HasAnyTargetForAttr(0) == 1) && (AI_CHK_FRIDHOJO(1, 0x0100) == 1)) || ((sLockMode != 2) && (AI_CHK_FRIDHOJO(1, 0x0200) == 1)))
+            if (((sLockMode != 1) && (((sNotPhysical == 0) && (HasAnyTargetForAttr(0) == 1)) || (HasAnyTargetForAttr(1) == 1)) && (AI_CHK_FRIDHOJO(1, 0x0100) == 1)) || ((sLockMode != 2) && (AI_CHK_FRIDHOJO(1, 0x0200) == 1)))
             {
                 AI_ACT_TAKEOVER(1);
                 sActionDone = 10;
@@ -2539,9 +2577,9 @@ void ACT_Takeover()
                             targetOrder = AI_GET_P_ORDER(targetUid);
                             if (targetOrder != 3)
                             {
-                                if ((sNotPhysical == 0) && (sLockMode != 1) && (HasAnyTargetForAttr(0) == 1) && (AI_CHK_FRIDHP(id, 40) == 0) && (AI_CHK_FRIDHOJO(id, 0x0100) == 1))
+                                if ((sLockMode != 1) && (AI_CHK_FRIDHP(id, 40) == 0) && (AI_CHK_FRIDHOJO(id, 0x0100) == 1))
                                 {
-                                    if ((id == 2) || (id == 5) || (id == 7) || (id == 9) || (id == 10))
+                                    if ((((sNotPhysical == 0) && (HasAnyTargetForAttr(0) == 1)) && ((id == 2) || (id == 5) || (id == 7) || (id == 9) || (id == 10))) || ((id == 7) && (HasAnyTargetForAttr(1) == 1)))
                                     {
                                         AI_ACT_TAKEOVER(id);
                                         sActionDone = 10;
