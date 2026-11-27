@@ -253,11 +253,12 @@ int HasAnyTargetForAttr(int attr)
     return 0;
 }
 
+// Elemental magic only (attrs 2..9) that Makarakarn (0x8000) can reflect.
 int HasOffensiveMagicSkill()
 {
     int attr;
     attr = 2;
-    while (attr <= 10)
+    while (attr <= 9)
     {
         if (AI_CHK_MYATTRSKIL(attr) == 1)
         {
@@ -268,26 +269,79 @@ int HasOffensiveMagicSkill()
     return 0;
 }
 
+// Explicit offensive Almighty skills (70=Megido, 71=Megidola, 72=Megidolaon, 297=Rebellion Blade) so utility elem=10 accessories (Guiding Tendril/Stagnant Air/Foul Breath/Ghastly Wail/Drains) never trigger false Concentrate holds.
+int HasOffensiveAlmightySkill()
+{
+    if ((AI_CHK_MYABLESKIL(70) == 1) || (AI_CHK_MYABLESKIL(71) == 1) || (AI_CHK_MYABLESKIL(72) == 1) || (AI_CHK_MYABLESKIL(297) == 1))
+    {
+        return 1;
+    }
+    return 0;
+}
+
 int HasUsableOffensiveMagic()
 {
     int attr;
-    int allMaka;
-    allMaka = 0;
+    if (HasOffensiveAlmightySkill() == 1)
+    {
+        return 1;
+    }
     if ((AI_CHK_ENHOJO(0x8000) == 1) && (AI_GET_ENHOJO_ON(0x8000) >= sEnemyCount))
     {
-        allMaka = 1;
+        return 0;
     }
     attr = 2;
-    while (attr <= 10)
+    while (attr <= 9)
     {
-        if (AI_CHK_MYATTRSKIL(attr) == 1)
+        if ((AI_CHK_MYATTRSKIL(attr) == 1) && (HasAnyTargetForAttr(attr) == 1))
         {
-            if ((attr == 10) || ((allMaka == 0) && (HasAnyTargetForAttr(attr) == 1)))
-            {
-                return 1;
-            }
+            return 1;
         }
         attr = attr + 1;
+    }
+    return 0;
+}
+
+int HasUsablePhysOrGun()
+{
+    if ((AI_CHK_ENHOJO(0x4000) == 1) && (AI_GET_ENHOJO_ON(0x4000) >= sEnemyCount))
+    {
+        return 0;
+    }
+    if ((sNotPhysical == 0) && (AI_CHK_MYATTRSKIL(0) == 1) && (HasAnyTargetForAttr(0) == 1))
+    {
+        return 1;
+    }
+    if ((AI_CHK_MYATTRSKIL(1) == 1) && (HasAnyTargetForAttr(1) == 1))
+    {
+        return 1;
+    }
+    return 0;
+}
+
+int HasAllyGunSkill(int id)
+{
+    if ((AI_CHK_FRIDABLESKIL(id, 227) == 1) || (AI_CHK_FRIDABLESKIL(id, 226) == 1) || (AI_CHK_FRIDABLESKIL(id, 225) == 1) || (AI_CHK_FRIDABLESKIL(id, 228) == 1) || (AI_CHK_FRIDABLESKIL(id, 224) == 1) || (AI_CHK_FRIDABLESKIL(id, 265) == 1))
+    {
+        return 1;
+    }
+    return 0;
+}
+
+// Allow ailments on non-bosses, Lavenza Phase 2 (464, COUNT 318==2), and Royal Kaneshiro Phase 3 guards (522/523, 255% ailment-vulnerable) while un-incapacitated.
+int CanUseAilmentOnCurrentBattle()
+{
+    if (sIsBoss == 0)
+    {
+        return 1;
+    }
+    if ((AI_CHK_ENID(464) == 1) && (GET_COUNT(318) == 2))
+    {
+        return 1;
+    }
+    if (((AI_CHK_ENID(522) == 1) || (AI_CHK_ENID(523) == 1)) && (AI_CHK_ENBAD(0x0F3E) == 0))
+    {
+        return 1;
     }
     return 0;
 }
@@ -295,8 +349,6 @@ int HasUsableOffensiveMagic()
 // Preserve Charge (0x0100) only if this actor can realistically spend it on a Phys/Gun skill (prevents Guard softlocks & mage poisoning).
 int ComputeShouldHoldCharge()
 {
-    int canHitPhys;
-    int canHitGun;
     if (AI_CHK_MYHOJO(0x0100) == 0)
     {
         return 0;
@@ -305,21 +357,7 @@ int ComputeShouldHoldCharge()
     {
         return 0;
     }
-    if ((AI_CHK_ENHOJO(0x4000) == 1) && (AI_GET_ENHOJO_ON(0x4000) >= sEnemyCount))
-    {
-        return 0;
-    }
-    canHitPhys = 0;
-    if ((sNotPhysical == 0) && (AI_CHK_MYATTRSKIL(0) == 1) && (HasAnyTargetForAttr(0) == 1))
-    {
-        canHitPhys = 1;
-    }
-    canHitGun = 0;
-    if ((AI_CHK_MYATTRSKIL(1) == 1) && (HasAnyTargetForAttr(1) == 1))
-    {
-        canHitGun = 1;
-    }
-    if ((canHitPhys == 0) && (canHitGun == 0))
+    if (HasUsablePhysOrGun() == 0)
     {
         return 0;
     }
@@ -564,18 +602,6 @@ int IsAttrKnownImpeded(int attr)
     return 0;
 }
 
-int IsAttrKnownImmune(int attr)
-{
-    int uid;
-    uid = AI_GET_UNIMUKOU(attr);
-    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
-    uid = AI_GET_UNIHANSYA(attr);
-    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
-    uid = AI_GET_UNIKYUSYU(attr);
-    if (uid != -1) { if (AI_CHK_UNIANALYZE_OPEN(uid, attr) == 1) { return 1; } }
-    return 0;
-}
-
 void Initialize()
 {
     int maxHp;
@@ -769,7 +795,7 @@ void AI_pattern_Free()
     ACT_UnknownAttr();
     if (sActionDone != 0) { return; }
 
-    if ((sAilmentPrioFlag == 0) && ((sIsBoss == 0) || ((AI_CHK_ENID(464) == 1) && (GET_COUNT(318) == 2))) && (IsHoldingUsableChargeOrConc() == 0))
+    if ((sAilmentPrioFlag == 0) && (CanUseAilmentOnCurrentBattle() == 1) && (IsHoldingUsableChargeOrConc() == 0))
     {
         roll = RND(100);
         if ((roll < 20) || (((sMyCharId == 4) || (sMyCharId == 7)) && (roll < 35)))
@@ -791,7 +817,7 @@ void AI_pattern_Free()
         if (sActionDone != 0) { return; }
     }
 
-    if ((sIsBoss == 0) || ((AI_CHK_ENID(464) == 1) && (GET_COUNT(318) == 2)))
+    if (CanUseAilmentOnCurrentBattle() == 1)
     {
         ACT_Ailment(0);
         if (sActionDone != 0) { return; }
@@ -845,7 +871,7 @@ void AI_pattern_Damage()
     ACT_GunSmart();
     if (sActionDone != 0) { return; }
 
-    if ((sIsBoss == 0) || ((AI_CHK_ENID(464) == 1) && (GET_COUNT(318) == 2)))
+    if (CanUseAilmentOnCurrentBattle() == 1)
     {
         ACT_Ailment(0);
         if (sActionDone != 0) { return; }
@@ -947,7 +973,7 @@ void AI_pattern_SaveHP()
     ACT_SupportRefresh();
     if (sActionDone != 0) { return; }
 
-    if ((sIsBoss == 0) || ((AI_CHK_ENID(464) == 1) && (GET_COUNT(318) == 2)))
+    if (CanUseAilmentOnCurrentBattle() == 1)
     {
         ACT_Ailment(0);
         if (sActionDone != 0) { return; }
@@ -2031,7 +2057,7 @@ void ACT_ChargeConcentrate(int aggressive)
         }
     }
 
-    if ((physOk == 1) && (AI_CHK_MYABLESKIL(360) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
+    if ((sLockMode != 1) && (HasUsablePhysOrGun() == 1) && (AI_CHK_MYABLESKIL(360) == 1) && (AI_CHK_NOTMYHOJO(0x0100) == 1))
     {
         if ((sMyHpPct > 40) && ((sIsBoss == 1) || ((aggressive == 1) && (sMySpPct >= 25)) || (sMySpPct >= 30)))
         {
@@ -2579,7 +2605,7 @@ void ACT_Takeover()
                             {
                                 if ((sLockMode != 1) && (AI_CHK_FRIDHP(id, 40) == 0) && (AI_CHK_FRIDHOJO(id, 0x0100) == 1))
                                 {
-                                    if ((((sNotPhysical == 0) && (HasAnyTargetForAttr(0) == 1)) && ((id == 2) || (id == 5) || (id == 7) || (id == 9) || (id == 10))) || ((id == 7) && (HasAnyTargetForAttr(1) == 1)))
+                                    if ((((sNotPhysical == 0) && (HasAnyTargetForAttr(0) == 1)) && ((id == 2) || (id == 5) || (id == 7) || (id == 9) || (id == 10))) || ((HasAnyTargetForAttr(1) == 1) && (HasAllyGunSkill(id) == 1)))
                                     {
                                         AI_ACT_TAKEOVER(id);
                                         sActionDone = 10;
@@ -2888,13 +2914,40 @@ int PickConcentrateAlly()
 
 int PickChargeAlly()
 {
+    int id;
     int uid;
     if (IsAllySkillCapable(1) == 1)  { if (AI_CHK_FRIDHOJO(1, 0x0100) == 0)  { return 1; } }
-    if (IsAllySkillCapable(2) == 1)  { uid = AI_GET_UNI(0, 2);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(2, 40) == 0)  && (AI_CHK_FRIDHOJO(2, 0x0100) == 0))  { return 2; } } }
-    if (IsAllySkillCapable(10) == 1) { uid = AI_GET_UNI(0, 10); if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(10, 40) == 0) && (AI_CHK_FRIDHOJO(10, 0x0100) == 0)) { return 10; } } }
-    if (IsAllySkillCapable(5) == 1)  { uid = AI_GET_UNI(0, 5);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(5, 40) == 0)  && (AI_CHK_FRIDHOJO(5, 0x0100) == 0))  { return 5; } } }
-    if (IsAllySkillCapable(9) == 1)  { uid = AI_GET_UNI(0, 9);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(9, 40) == 0)  && (AI_CHK_FRIDHOJO(9, 0x0100) == 0))  { return 9; } } }
-    if (IsAllySkillCapable(7) == 1)  { uid = AI_GET_UNI(0, 7);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(7, 40) == 0)  && (AI_CHK_FRIDHOJO(7, 0x0100) == 0))  { return 7; } } }
+    if ((sNotPhysical == 0) && (HasAnyTargetForAttr(0) == 1))
+    {
+        if (IsAllySkillCapable(2) == 1)  { uid = AI_GET_UNI(0, 2);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(2, 40) == 0)  && (AI_CHK_FRIDHOJO(2, 0x0100) == 0))  { return 2; } } }
+        if (IsAllySkillCapable(10) == 1) { uid = AI_GET_UNI(0, 10); if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(10, 40) == 0) && (AI_CHK_FRIDHOJO(10, 0x0100) == 0)) { return 10; } } }
+        if (IsAllySkillCapable(5) == 1)  { uid = AI_GET_UNI(0, 5);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(5, 40) == 0)  && (AI_CHK_FRIDHOJO(5, 0x0100) == 0))  { return 5; } } }
+        if (IsAllySkillCapable(9) == 1)  { uid = AI_GET_UNI(0, 9);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(9, 40) == 0)  && (AI_CHK_FRIDHOJO(9, 0x0100) == 0))  { return 9; } } }
+        if (IsAllySkillCapable(7) == 1)  { uid = AI_GET_UNI(0, 7);  if (uid != -1) { if ((AI_GET_P_ORDER(uid) != 3) && (AI_CHK_FRIDHP(7, 40) == 0)  && (AI_CHK_FRIDHOJO(7, 0x0100) == 0))  { return 7; } } }
+        return 0;
+    }
+    if (HasAnyTargetForAttr(1) == 1)
+    {
+        id = 2;
+        while (id <= 10)
+        {
+            if (id != 8)
+            {
+                if ((IsAllySkillCapable(id) == 1) && (AI_CHK_FRIDHP(id, 40) == 0) && (AI_CHK_FRIDHOJO(id, 0x0100) == 0) && (HasAllyGunSkill(id) == 1))
+                {
+                    uid = AI_GET_UNI(0, id);
+                    if (uid != -1)
+                    {
+                        if (AI_GET_P_ORDER(uid) != 3)
+                        {
+                            return id;
+                        }
+                    }
+                }
+            }
+            id = id + 1;
+        }
+    }
     return 0;
 }
 
@@ -3555,7 +3608,7 @@ void ACT_Support(int guaranteed)
                 return;
             }
         }
-        if ((sNotPhysical == 0) && (sLockMode != 1) && (HasAnyTargetForAttr(0) == 1) && (AI_CHK_MYABLESKIL(189) == 1))
+        if ((sLockMode != 1) && ((AI_CHK_ENHOJO(0x4000) == 0) || (AI_GET_ENHOJO_ON(0x4000) < sEnemyCount)) && (((sNotPhysical == 0) && (HasAnyTargetForAttr(0) == 1)) || (HasAnyTargetForAttr(1) == 1)) && (AI_CHK_MYABLESKIL(189) == 1))
         {
             allyId = PickChargeAlly();
             if (allyId != 0)
@@ -3953,7 +4006,7 @@ void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
         }
     }
 
-    if ((AI_CHK_MYABLESKIL(226) == 1) || (AI_CHK_MYABLESKIL(228) == 1) || (AI_CHK_MYABLESKIL(224) == 1))
+    if ((AI_CHK_MYABLESKIL(226) == 1) || (AI_CHK_MYABLESKIL(228) == 1) || (AI_CHK_MYABLESKIL(224) == 1) || (AI_CHK_MYABLESKIL(265) == 1))
     {
         uid = AI_GET_UNIWEAK(1);
         if (uid != -1)
@@ -3995,6 +4048,13 @@ void TryGunSkills(int hpMin, int heavyHpMin, int preferHighHp)
                 if (AI_CHK_MYABLESKIL(224) == 1)
                 {
                     AI_ACT_SKILL(224);
+                    AI_TAR_UID(uid);
+                    sActionDone = 10;
+                    return;
+                }
+                if (AI_CHK_MYABLESKIL(265) == 1)
+                {
+                    AI_ACT_SKILL(265);
                     AI_TAR_UID(uid);
                     sActionDone = 10;
                     return;
@@ -4067,7 +4127,7 @@ void ACT_BestOffense(int aggressive)
     {
         if (sNotPhysical == 0)
         {
-            TrySignaturePhysSkills(1, 45, 1);
+            TrySignaturePhysSkills(1, 40, 1);
             if (sActionDone != 0) { return; }
 
             if (IsAoESafeForAttr(0) == 1)
@@ -4098,7 +4158,7 @@ void ACT_BestOffense(int aggressive)
                 }
             }
         }
-        TryGunSkills(40, 45, 1);
+        TryGunSkills(40, 40, 1);
         if (sActionDone != 0) { return; }
     }
 
@@ -4437,7 +4497,7 @@ void ACT_PhysZeroSP()
     if (isCharged == 1)
     {
         hpMin = 40;
-        heavyHpMin = 45;
+        heavyHpMin = 40;
         preferHigh = 1;
     }
     else
